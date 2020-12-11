@@ -3,7 +3,7 @@ This package is currently work in progress. The project is projected to be compl
 
 # PrecursorAnalysis
 Identification and analysis of precursors of time-series using the Intelligent Methodology for the Discovery of Precursor of adverse Events (IM-DoPE). 
-![IM-DoPE](img/img/IMDOPE.jpg)
+![IM-DoPE](img/IMDOPE.jpg)
 
 # Training a model
 The model can be train directly from the root of the repo using:
