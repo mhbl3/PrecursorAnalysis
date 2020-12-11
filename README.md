@@ -8,6 +8,7 @@ Identification and analysis of precursors of time-series using the Intelligent M
 # Training a model
 The model can be train directly from the root of the repo using:
 ```
+cd ../PrecursorAnalysis
 python -m imdope.train --model-type "mc" --lr 0.001 --l2 0.001 --ks 8 5 3 --out-channels 10 15 20 --use-stratisfy True --model-name "test_model.pt" --epochs 1 --data-container "./Data/new_dc_HS.pkl" --use-cuda True
 ```
 
