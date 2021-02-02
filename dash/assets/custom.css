@@ -1,0 +1,43 @@
+/*.top_banner > a > img {*/
+/*  height: 70px;*/
+/*  float: left;*/
+/*  padding: 10px;*/
+/*  padding-bottom: 0px;*/
+/*  transition-duration: 500ms;*/
+/*}*/
+/*.top_banner > a > img:hover {*/
+/*  filter: brightness(2);*/
+/*}*/
+/*.top_banner > img {*/
+/*  height: 36px;*/
+/*  float: right;*/
+/*  margin: 10px;*/
+/*  transition-duration: 500ms;*/
+/*}*/
+.top_banner h2 {
+  font-size: 20pt;
+  font-family: "Times";
+  font-weight: 200 !important;
+  letter-spacing: 1px;
+  position: absolute;
+  top: 5px;
+  margin-left: 600px;
+}
+
+
+.top_banner {
+  position: absolute;
+  top: 0px;
+  left: 0px;
+  padding: 40px 0px;
+  width: 100%;
+  background: rgb(2, 21, 70);
+  color: white;
+  font-size: 20px;
+  margin-bottom: 30px;
+}
+
+.class-selected-params {
+  background: white;
+  color: white;
+}

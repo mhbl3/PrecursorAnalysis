@@ -8,11 +8,14 @@ from functools import partial
 import argparse
 import numpy as np
 import torch
+import pickle as pkl
+import ast
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, nargs = "+",
                     help='learning rate')
+
 parser.add_argument('--l2', type=float, nargs= "+", 
                     help='weight decay')
 
@@ -44,33 +47,62 @@ parser.add_argument('--epochs', type=int, default=30,
 parser.add_argument('--out-dir', type=str,
                     help='output directory')
 
-parser.add_argument('--adopt-dir', type=str,
+parser.add_argument('--adopt-dir', type=str, nargs="+",
                     help='ADOPT directory')
 
-parser.add_argument('--run-methods', default =[True, True, True], type=bool, nargs='+', action="append",
+parser.add_argument('--run-methods', default =[True, True, True], nargs='+',
                     help='Methods for hyper param')
 
-parser.add_argument('--load-models', type=str, default=False,
+parser.add_argument('--load-models', type=bool, default=False,
                     help='Load already trained trial models')
 
-parser.add_argument('--use-stratisfy', type=str, default=False,
+parser.add_argument('--use-stratisfy', type=bool, default=False,
                     help='True use stratisfied mini-batch strategy')
+
+parser.add_argument('--aggregation', type=str, default="maxpool",
+                    help='aggregation type for logistic regression model')
+
+parser.add_argument('--dropout', type=float, nargs="+", default=0.0,
+                    help='weight decay')
+
+parser.add_argument('--gru-hidden', type=int, default=5,
+                    help='Hidden layers for GRU')
+
+parser.add_argument('--model-type', type=str, choices=["lr_binary","imdope_binary", "imdope_mc"],
+                    help='Model type')
+
+parser.add_argument('--use-cuda', type=bool, default=False,
+                    help='True uses cuda')
+
+parser.add_argument('--n-classes', type=int, default=2,
+                    help='Number of classes')
+
+parser.add_argument('--optimizer', type=str, choices=["SGD", "adam"], default="adam",
+                    help='Optimizer to use')
+
 args = parser.parse_args()
 
-if args.load_models == "yes":
+if args.load_models :
     load_models = True
-elif args.load_models:
+else :
     load_models = False
     
-if args.use_stratisfy == "yes":
+if args.use_stratisfy:
     use_stratisfy = True
-elif args.use_stratisfy:
+else :
     use_stratisfy = False
+
+if args.use_cuda:
+    device = "cuda:0"
+else:
+    device = "cpu"
+
+run_methods = [ast.literal_eval(i) for i in args.run_methods]
 
 ###### Data Processing
 #%%
 if __name__ == "__main__":
-    myseed = 45237552 +60 +1
+    myseed = 45237552
     np.random.seed(120)
     torch.manual_seed(myseed)
 
@@ -101,9 +133,17 @@ if __name__ == "__main__":
     mini_batch = args.mini_batch_percent#[0.5]# [1, 0.5] #[1, 0.5, 0.25]
     last_layer = ["cnn"]#["dense", "cnn"]
     batch_norm = [True] #[True, False]
-    optimizer = ["adam"] # ["adam", "SGD"]
     epochs = [args.epochs]
     mini_b_strat = [use_stratisfy]
+
+    aggregation = [args.aggregation]
+    gru_hidden_size = [args.gru_hidden]
+    dropout = [args.dropout]
+    model_type = [args.model_type]
+    n_classes = [args.n_classes]
+    optimizer = [args.optimizer]
+
+
 
     if mini_b_strat[0] == False:
         params = {"learning_rate":lr,
@@ -111,27 +151,35 @@ if __name__ == "__main__":
                   "kernel_size":ks,
                   "n_filters":out_channels,
                   "batch_size_percent":mini_batch,
-                  "fourth_layer":last_layer,
+                  "n_classes":n_classes,
                   "use_batch_norm":batch_norm,
                   "optimizer":optimizer,
-                  "epochs":epochs}
+                  "epochs":epochs,
+                  "gru_hidden_size":gru_hidden_size,
+                  "dropout":dropout,
+                  "model_type":model_type,
+                  "aggregation":aggregation}
     else:
         params = {"learning_rate":lr,
                   "l2":l2,
                   "kernel_size":ks,
                   "n_filters":out_channels,
                   "batch_size_percent":mini_batch,
-                  "fourth_layer":last_layer,
+                  "n_classes":n_classes,
                   "use_batch_norm":batch_norm,
                   "optimizer":optimizer,
                   "epochs":epochs,
-                  "use_stratified_batch_size":mini_b_strat}
+                  "use_stratified_batch_size":mini_b_strat,
+                  "gru_hidden_size": gru_hidden_size,
+                  "dropout": dropout,
+                  "model_type": model_type,
+                  "aggregation": aggregation
+                  }
 
 
     n_processes = 2
     list_params = []
     procs = []
-    device = "cuda:0"
     load_trained_model = load_models
     combs = []
     dm.trainX, dm.valX = dm.trainX.astype(np.float64), dm.valX.astype(np.float64)
@@ -178,7 +226,7 @@ if __name__ == "__main__":
     for iteration, comb in enumerate(combs):
         print(f"Starting combination_{iteration}")
         tuning_wraper(data, comb, load_trained_model, 
-        run_methods=args.run_methods, path_to_ADOPT_run=args.adopt_dir)
+        run_methods=run_methods, path_to_ADOPT_run=args.adopt_dir)
     # else:
     #     pool = mp.Pool(processes=n_processes)#processes=n_processes)
     #     func = partial(tuning_wraper, data)

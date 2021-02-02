@@ -7,15 +7,16 @@ import torch as tc
 from sklearn.metrics import *
 from tqdm import tqdm
 from torch.nn import functional as F
-from ..utils import one_hot_embedding
+from ..utils import one_hot_embedding, window_padding
 import pickle as pkl
 import copy 
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, WeightedRandomSampler
 import warnings
 
-tc.manual_seed(45237613)
+myseed = 45237552
 np.random.seed(120)
+tc.manual_seed(myseed)
 
 # Model Container Class Definition
 class ModelContainer():
@@ -26,7 +27,7 @@ class ModelContainer():
             self.device = kwargs["device"]
         else:
             self.device = tc.device("cuda:0" if tc.cuda.is_available else "cpu")
-        print(f" Using {self.device}")
+        print(f"Model container using {self.device}")
         if "optimizer" in kwargs:
             self.optimizer = kwargs["optimizer"]
         else:
@@ -76,15 +77,19 @@ class ModelContainer():
                 proba_time = proba_time[flight_id, :]
             else:
                 #TODO: Check shape
-                proba_time = proba_time[flight_id, :, class_interest]
+                if (len(proba_time.shape) ==3) and (class_interest is not None):
+                    proba_time = proba_time[flight_id, :, class_interest]
+                elif (len(proba_time.shape) ==3) and (class_interest is None):
+                    raise ValueError("class_interest is not set")
         time_step_masks = np.where(proba_time > self.threshold)[0]
         diff_time_step_masks = np.diff(time_step_masks)
         where_jump = np.where(diff_time_step_masks > 1)[0] +1
         # self.first_flag_index = []
         self.multiple_precursors = [True if where_jump.shape[0] == 0 else False][0]
-        
+
+        # Search where precursor proba > threshold and obtain feature precursor score
         if where_jump.shape[0] == 0:
-            time_step_mask  = time_step_masks
+            time_step_mask = time_step_masks
             self.first_flag_index = time_step_mask[0]
             temp = precursor_proba[flight_id, time_step_mask, :]
             if show_largest_change:
@@ -159,7 +164,7 @@ class ModelContainer():
             filename = filename + ".pt"
         with open(filename, "wb") as f:
             tc.save(self, f)
-        print("Model Saved!")
+        print(f"Model Saved! (path: {filename})")
 
     def count_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -183,50 +188,63 @@ class ModelContainer():
          if rescaling_factor < 0:
              precursor_proba = precursor_proba + rescaling_factor
          elif rescaling_factor > 0:
-             precursor_proba = abs( precursor_proba- rescaling_factor)
+             precursor_proba = abs(precursor_proba-rescaling_factor)
          else:
-             precursor_proba =  precursor_proba - rescaling_factor
+             precursor_proba = precursor_proba - rescaling_factor
                   
          n_features = precursor_proba.shape[2]
          if class_interest is not None:
-             proba_time = proba_time[flight_id, :, class_interest]
+             grey_area_class_plot_idx = class_interest
+         else:
+             grey_area_class_plot_idx = 0
+             # if len(proba_time.shape) == 3:
+             #    proba_time = proba_time[flight_id, :, class_interest]
          height = 3.5* int(n_features/4+1)
          fig, ax1 = plt.subplots(int(n_features/4+1), 4, figsize=(width, height))
          fig.tight_layout(pad=6.5)
              
          for i in range(0, int(n_features-4)+1):
              for j in range(0, 4):
-                 if i==0 and j==0:
-                     if proba_time.shape[1] != full_length:
-                         # pad values
-                         r_proba_time = self.window_padding(proba_time[flight_id,:].flatten(),
-                                                            full_length)
+                 if i == 0 and j == 0:
+                     if len(proba_time.shape) < 3:
+                         num_loops = 1
                      else:
-                        r_proba_time = proba_time[flight_id,:].flatten()
-                     
-                     if show_precursor_range:
-                         mask_idx = np.where(r_proba_time > self.threshold)[0]
-                         diff_time_step_masks = np.diff(mask_idx)
-                         where_jump = np.where(diff_time_step_masks > 1)[0] +1
-                        
-                     ax1[i,j].plot(r_proba_time, "r")
-                     ax1[i,j].set_ylabel("Probability")
-                     ax1[i,j].set_title("Precursor Score")
-                     ax1[i,j].grid(True)
-                     ax1[i,j].set_xlabel("Distance to event")
-                     ax1[i,j].set_yticks(np.arange(0, 1.1, 0.1))
-                     x = np.arange(20 , -0.25, -0.25)
-                     ax1[i,j].set_xticks(range(0, full_length, 10))
-                     if show_precursor_range:
-                         if where_jump.shape[0] == 0:
-                             ax1[i,j].axvspan(mask_idx[0], mask_idx[-1], alpha=0.3, color='grey')
+                         num_loops = proba_time.shape[-1]
+                     for class_idx in range(num_loops):
+                         tmp_proba_time = proba_time[flight_id,:] if len(proba_time.shape) < 3 else proba_time[flight_id,:, class_idx]
+                         if proba_time.shape[1] != full_length:
+                             # pad values
+                             r_proba_time = self.window_padding(tmp_proba_time.flatten(),
+                                                                full_length)
                          else:
-                             mask_idxs = mask_idx
-                             split_time_masks = np.split(mask_idxs, where_jump)
-                             for mask_idx in split_time_masks:
+                            r_proba_time = tmp_proba_time.flatten()
+
+                         if (show_precursor_range) and (grey_area_class_plot_idx==class_idx):
+                             mask_idx = np.where(r_proba_time > self.threshold)[0]
+                             diff_time_step_masks = np.diff(mask_idx)
+                             where_jump = np.where(diff_time_step_masks > 1)[0] +1
+                         if class_idx == 0:
+                            ax1[i,j].plot(r_proba_time, "r")
+                         else:
+                             ax1[i, j].plot(r_proba_time)
+                         ax1[i,j].set_ylabel("Probability")
+                         ax1[i,j].set_title("Precursor Score")
+                         ax1[i,j].grid(True)
+                         ax1[i,j].set_xlabel("Distance to event")
+                         ax1[i,j].set_yticks(np.arange(0, 1.1, 0.1))
+                         x = np.arange(20 , -0.25, -0.25)
+                         ax1[i,j].set_xticks(range(0, full_length, 10))
+
+                         if (show_precursor_range) and (grey_area_class_plot_idx==class_idx):
+                             if where_jump.shape[0] == 0:
                                  ax1[i,j].axvspan(mask_idx[0], mask_idx[-1], alpha=0.3, color='grey')
-                     ax1[i,j].set_xticklabels(x[::10])
-                            
+                             else:
+                                 mask_idxs = mask_idx
+                                 split_time_masks = np.split(mask_idxs, where_jump)
+                                 for mask_idx in split_time_masks:
+                                     ax1[i,j].axvspan(mask_idx[0], mask_idx[-1], alpha=0.3, color='grey')
+                         ax1[i,j].set_xticklabels(x[::10])
+
                      continue
                  if counter == n_features:
                      break
@@ -374,8 +392,6 @@ class ModelContainer():
         # Train the model
         try:
             for epoch in tqdm(range(num_epochs)):
-                # Permutting batch
-                permutation = tc.randperm(X_train.size(0))
                 batch_acc = []
                 batch_val_acc = []
                 batch_f1 = []
@@ -384,6 +400,7 @@ class ModelContainer():
                 
                 for iteration, (batch_x, batch_y) in enumerate(dataloader_train):
                     batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                    optimizer.zero_grad()
                     if (epoch == 0) and iteration == 0:
                         for c in tc.unique(y_train):
                             print(f"Proportion Class {c}: {batch_y[batch_y==c].shape[0]/len(batch_y)}")
@@ -409,7 +426,6 @@ class ModelContainer():
                     
                     
                     # Backprop and perform Adam optimisation
-                    optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     
@@ -418,8 +434,9 @@ class ModelContainer():
                         with tc.no_grad():
                             mini_loss = [] 
                             for batch_X_val, batch_y_val in dataloader_val:
+                                batch_X_val, batch_y_val = batch_X_val.to(self.device), batch_y_val.to(self.device)
                                 self.valYhat = clf(batch_X_val)
-                                val_loss = criterion(self.valYhat, y_val.flatten())
+                                val_loss = criterion(self.valYhat, batch_y_val.flatten())
                                 mini_loss.append(val_loss.item())
 
                                 if self.task == "binary":
@@ -520,12 +537,20 @@ class ModelContainer():
                            model_out_cpu=True, **kw):
 
         # Convert to parameters CUDA Tensors
-        clf = clf.to(self.device)
+        try:
+            clf = clf.to(self.device)
+        except:
+            pass
+        try:
+            clf.train()
+        except:
+            pass
 
         self.n_epochs = num_epochs
         print_every_epochs = kw.pop("print_every_epochs", 10)
         average = kw.pop("average", "weighted")
         self.optimizer = kw.pop("optimizer", "adam")
+        hard_th = kw.pop("hard_th", False)
         # Binary cross entropy loss, learning rate and l2 regularization
         weight = kw.pop("class_weight", None)
         if weight is not None:
@@ -586,8 +611,6 @@ class ModelContainer():
             # print(1/tc.tensor(class_sample_counts))
             weights = tc.tensor(weights).to(self.device)
             samples_weights = weights[y_train.type(tc.LongTensor).to(self.device)]
-            print(tc.sum(weights))
-            print("___________________________")
             sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
             dataloader_train = DataLoader(data_train, batch_size=self.batch_size, sampler=sampler)
         if X_val is not None:
@@ -602,6 +625,7 @@ class ModelContainer():
                 batch_val_f1 = []
                 for iteration, (batch_x, batch_y) in enumerate(dataloader_train):
                     batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                    optimizer.zero_grad()
                     if (epoch == 0) and iteration == 0:
                         for c in tc.unique(y_train):
                             print(f"Proportion Class {c}: {batch_y[batch_y == c].shape[0] / len(batch_y)}")
@@ -613,6 +637,9 @@ class ModelContainer():
                     # y_temp.scatter_(1, y, 1)
                     y_temp = one_hot_embedding(batch_y.flatten(), n_class)
                     # obtain the loss
+                    if hard_th:
+                        bool_mat = nn.Sigmoid()(outputs) <= self.threshold
+                        outputs[bool_mat] = -10 # large logits
                     loss = criterion(outputs, y_temp.to(self.device))
                     hist[epoch] = loss.item()
 
@@ -632,7 +659,6 @@ class ModelContainer():
                     batch_f1.append(f1_score(batch_y_cpu,
                                              temp_outpouts, average=average))
                     # Backprop and perform Adam optimisation
-                    optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
 
@@ -722,13 +748,20 @@ class ModelContainer():
         y_hat = tc.zeros(len(self.x_train))
         top_features, top_features_values= [], []
         time_proba = np.zeros((self.x_train.shape[0], self.Wn))
-        for iteration, i in enumerate(range(0, self.x_train.shape[0], batch_size)): 
-          y_hat[i:i+batch_size] = self.trainedModel.predict(self.x_train[i:i+batch_size])
-          time_proba[i:i+batch_size] = self.trainedModel.proba_time.squeeze().detach().numpy()
+        for iteration, i in enumerate(range(0, self.x_train.shape[0], batch_size)):
+          if self.n_classes ==1:
+            temp_y =  self.trainedModel.predict(self.x_train[i:i+batch_size], train=False)
+            temp_proba = self.trainedModel.proba_time.squeeze().detach().numpy()
+          else:
+            temp_y = self.trainedModel.predict(self.x_train[i:i+batch_size], train=False)[1]
+            N = len(self.x_train[i:i+batch_size])
+            temp_proba = self.trainedModel.proba_time[np.arange(N), :, temp_y].squeeze().detach().numpy()
+          y_hat[i:i+batch_size] = temp_y
+          time_proba[i:i+batch_size] = temp_proba
           if get_important_features:
-            for flight_id in range(0, batch_size):
+            for e, flight_id in enumerate(range(0, batch_size)):
               try:
-                self.trainedModel.show_feature_importance(self.header, flight_id, plot=False)
+                self.trainedModel.show_feature_importance(self.header, flight_id, plot=False, class_interest=temp_y[e])
                 if self.trainedModel.multiple_precursors:
                     top_features.append(self.trainedModel.sorted_features)
                     top_features_values.append(self.trainedModel.sorted_features_values)
@@ -746,17 +779,21 @@ class ModelContainer():
         y_hat = tc.zeros(len(self.x_test))
         top_features, top_features_values = [], []
         time_proba = np.zeros((self.x_test.shape[0], self.Wn))
-        for iteration, i in enumerate(range(0, self.x_test.shape[0], batch_size)): 
-#           print("Starting...")
-          y_hat[i:i+batch_size] = self.trainedModel.predict(self.x_test[i:i+batch_size])
-          time_proba[i:i+batch_size] = self.trainedModel.proba_time.squeeze().detach().numpy()
-#           print(self.x_test[i:i+batch_size].shape)
-#           print(f"Iteration #{iteration}")
+        for iteration, i in enumerate(range(0, self.x_test.shape[0], batch_size)):
+          if self.n_classes == 1:
+              temp_y = self.trainedModel.predict(self.x_test[i:i+batch_size], train=False)
+              temp_proba = self.trainedModel.proba_time.squeeze().detach().numpy()
+          else:
+              temp_y = self.trainedModel.predict(self.x_test[i:i+batch_size], train=False)[1]
+              N = len(self.x_test[i:i+batch_size])
+              temp_proba = self.trainedModel.proba_time[np.arange(N), :, temp_y].squeeze().detach().numpy()
+          y_hat[i:i+batch_size] = temp_y
+          time_proba[i:i+batch_size] = temp_proba
           if get_important_features:
             limit = min([batch_size, len(self.x_test)])
-            for flight_id in range(0, limit):
+            for e, flight_id in enumerate(range(0, limit)):
               try:
-                  self.trainedModel.show_feature_importance(self.header, flight_id, plot=False)
+                  self.trainedModel.show_feature_importance(self.header, flight_id, plot=False, class_interest=temp_y[e])
                   if self.trainedModel.multiple_precursors:
                       top_features.append(self.trainedModel.sorted_features)
                       top_features_values.append(self.trainedModel.sorted_features_values)
@@ -773,13 +810,214 @@ class ModelContainer():
       else:
         y_hat_train = tc.zeros(len(self.x_train))
         y_hat_val = tc.zeros(len(self.x_test))
-        for iteration, i in enumerate(range(0, self.x_train.size(0), batch_size)): 
-          y_hat_train[i:i+batch_size] = self.trainedModel.predict(self.x_train[i:i+batch_size])
-        for iteration, i in enumerate(range(0, self.x_test.size(0), self.batch_size)): 
-          y_hat_val[i:i+batch_size] = self.trainedModel.predict(self.x_test[i:i+batch_size])
+        for iteration, i in enumerate(range(0, self.x_train.size(0), batch_size)):
+          if self.n_classes == 1:
+              temp_y = self.trainedModel.predict(self.x_test[i:i+batch_size], train=False)
+          else:
+              temp_y = self.trainedModel.predict(self.x_test[i:i+batch_size], train=False)[1]
+          y_hat_train[i:i+batch_size] = temp_y
+        for iteration, i in enumerate(range(0, self.x_test.size(0), self.batch_size)):
+          if self.n_classes == 1:
+              temp_y = self.trainedModel.predict(self.x_test[i:i+batch_size], train=False)
+          else:
+              temp_y = self.trainedModel.predict(self.x_test[i:i+batch_size], train=False)[1]
+          y_hat_val[i:i+batch_size] = temp_y
         return y_hat_train, y_hat_val
 
 ### Binary Models
+
+class MILLR(tc.nn.Module):
+    def __init__(self, input_dim, flight_length, device, aggregation="maxpool"):
+        super(MILLR, self).__init__()
+        self.fc = nn.Linear(input_dim, 1)
+        self.sigmoid = nn.Sigmoid()
+        self.flight_length = flight_length
+        self.D = input_dim
+        self.device = device
+        self.task = "binary"
+        self.threshold = 0.5
+        self.agg = aggregation
+
+    def forward(self, x, train=True):
+        N, _, _ = x.size()
+        self.pi = self.sigmoid(self.fc(x)).squeeze()  # NxL
+        self.proba_time = self.pi
+        if self.agg == "mean":
+            p = tc.mean(self.pi, axis=-1)  # Nx1
+        elif self.agg == "maxpool":
+            p = tc.max(self.pi, dim=-1)[0]
+        return p
+
+    def get_feature_importance(self, columns, n_top=5):
+        coeffs = self.fc.weight.flatten().detach().numpy()
+        sorted_feat_idx = np.argsort(coeffs)[::-1]
+        sorted_columns = columns[sorted_feat_idx[:n_top]]
+        top_values = coeffs[sorted_feat_idx[:n_top]]
+        return sorted_columns, top_values
+
+    def cross_time_steps_loss(self, Pi):
+        diff = (Pi[:, :-1] - Pi[:, 1:]) ** 2
+        return tc.mean(tc.mean(diff, axis=-1))
+
+    def train_LR(self, X_train, y_train, X_val, y_val, batch_size, print_every_epochs=5,
+                 l2=0.001, learning_rate=0.001, use_stratified_batch_size=True, verbose=1,
+                 num_epochs=100, optimizer="adam", momentum=0.99):
+        self.train()
+        if "cuda" in self.device:
+            self.cuda()
+        else:
+            self.cpu()
+
+        self.batch_size = batch_size
+        criterion = nn.BCELoss()
+        if optimizer == "adam":
+            optimizer = tc.optim.Adam(self.parameters(),
+                                      lr=learning_rate, weight_decay=l2)
+        else:
+            optimizer = tc.optim.SGD(self.parameters(), momentum=momentum,
+                                     lr=learning_rate, weight_decay=l2)
+        hist = np.zeros(num_epochs)
+        val_hist = np.zeros(num_epochs)
+        b_acc = np.zeros(num_epochs)
+        val_b_acc = np.zeros(num_epochs)
+        f1 = np.zeros(num_epochs)
+        val_f1 = np.zeros(num_epochs)
+
+        # Conversion to tensors
+        if not tc.is_tensor(X_train):
+            X_train = tc.Tensor(X_train)
+        if not tc.is_tensor(y_train):
+            y_train = tc.Tensor(y_train.flatten())
+
+        if X_val is not None:
+            if not tc.is_tensor(X_val):
+                X_val = tc.Tensor(X_val)
+            if not tc.is_tensor(y_val):
+                y_val = tc.Tensor(y_val)
+            data_val = myDataset(X_val, y_val)
+
+        data_train = myDataset(X_train, y_train)
+        if use_stratified_batch_size is False:
+            print("Mini-batch strategy: Random sampling")
+            dataloader_train = DataLoader(data_train, batch_size=self.batch_size, shuffle=True)
+        else:
+            print("Mini-batch strategy: Stratified")
+            # get class counts
+            weights = []
+            for label in tc.unique(y_train):
+                count = len(tc.where(y_train == label)[0])
+                weights.append(1 / count)
+            weights = tc.tensor(weights).to(self.device)
+            samples_weights = weights[y_train.type(tc.LongTensor).to(self.device)]
+            sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
+            dataloader_train = DataLoader(data_train, batch_size=self.batch_size, sampler=sampler)
+        if X_val is not None:
+            dataloader_val = DataLoader(data_val, batch_size=self.batch_size, shuffle=False)
+
+        try:
+            for epoch in tqdm(range(num_epochs)):
+                batch_acc = []
+                batch_val_acc = []
+                batch_f1 = []
+                batch_val_f1 = []
+
+                for iteration, (batch_x, batch_y) in enumerate(dataloader_train):
+                    batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                    if (epoch == 0) and iteration == 0:
+                        for c in tc.unique(y_train):
+                            print(f"Proportion Class {c}: {batch_y[batch_y == c].shape[0] / len(batch_y)}")
+
+                    outputs = self.forward(batch_x)
+                    g_loss = self.cross_time_steps_loss(self.pi)
+                    # obtain the loss
+                    loss = criterion(outputs.flatten(), batch_y.view(-1).flatten()) + g_loss
+                    hist[epoch] = loss.item()
+
+                    if "cuda" in self.device:
+                        temp_outpouts = (outputs.cpu().detach().numpy() > self.threshold).astype(int)
+                        y_batch = batch_y.view(-1).cpu().detach().numpy()
+                        b_acc[epoch] = balanced_accuracy_score(y_batch,
+                                                               temp_outpouts)
+                    else:
+                        temp_outpouts = (outputs.detach().numpy() > self.threshold).astype(int)
+                        y_batch = batch_y.view(-1).detach().numpy()
+                        b_acc[epoch] = balanced_accuracy_score(y_batch,
+                                                               temp_outpouts)
+                    batch_acc.append(b_acc[epoch])
+                    batch_f1.append(f1_score(y_batch, temp_outpouts, average='binary'))
+
+                    # Backprop and perform Adam optimisation
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    if X_val is not None:
+                        with tc.no_grad():
+                            mini_loss = []
+                            for batch_X_val, batch_y_val in dataloader_val:
+                                batch_X_val, batch_y_val = batch_X_val.to(self.device), batch_y_val.to(self.device)
+                                self.valYhat = self.forward(batch_X_val)
+                                g_loss_val = self.cross_time_steps_loss(self.pi)
+                                val_loss = criterion(self.valYhat, batch_y_val.flatten()) + g_loss_val
+                                mini_loss.append(val_loss.item())
+
+                                if self.task == "binary":
+                                    if "cuda" in self.device:
+                                        temp_out_y = (self.valYhat.cpu().detach().numpy() > self.threshold).astype(int)
+                                        y_val_batch = batch_y_val.view(-1).cpu().detach().numpy()
+                                        val_b_acc[epoch] = balanced_accuracy_score(y_val_batch,
+                                                                                   temp_out_y)
+                                    else:
+                                        temp_out_y = (self.valYhat.detach().numpy() > self.threshold).astype(int)
+                                        y_val_batch = batch_y_val.view(-1).detach().numpy()
+                                        val_b_acc[epoch] = balanced_accuracy_score(y_val_batch,
+                                                                                   temp_out_y)
+                                    batch_val_acc.append(val_b_acc[epoch])
+                                    batch_val_f1.append(f1_score(y_val_batch, temp_out_y, average='binary'))
+                            val_hist[epoch] = np.mean(mini_loss)
+                    if verbose == 1:
+                        if self.task == "binary":
+                            if epoch % 10 == 0:
+                                print("\nEpoch: %d, loss: %1.5f" % (epoch, loss.item()))
+                                print("Epoch: %d, b_acc: %1.5f" % (epoch, b_acc[epoch]))
+                                print("Epoch: %d, f1 (binary): %1.5f" % (
+                                epoch, f1_score(y_batch, temp_outpouts, average='binary')))
+                                if X_val is not None:
+                                    print("Epoch: %d, val_loss: %1.5f" % (epoch, val_hist[epoch]))
+                                    print("Epoch: %d, val_b_acc: %1.5f" % (epoch, val_b_acc[epoch]))
+                                    print("Epoch: %d, val_f1 (binary): %1.5f\n" % (
+                                    epoch, f1_score(y_val_batch, temp_out_y, average='binary')))
+                        else:
+                            if epoch % print_every_epochs == 0:
+                                print("\nEpoch: %d, loss: %1.5f" % (epoch, loss.item()))
+                if self.task == "binary":
+                    b_acc[epoch] = np.mean(batch_acc)
+                    val_b_acc[epoch] = np.mean(batch_val_acc)
+                    f1[epoch] = np.mean(batch_f1)
+                    val_f1[epoch] = np.mean(batch_val_f1)
+        except KeyboardInterrupt:
+            self.cpu()
+            self.device = "cpu"
+            # Eval/testing mode
+            self.eval()
+            self.x_train = X_train
+            self.x_test = X_val
+            self.hist = hist
+            self.val_hist = val_hist
+        except:
+            raise
+
+        self.cpu()
+        self.device = "cpu"
+        self.eval()
+        self.x_train = X_train
+        self.x_test = X_val
+        self.hist = hist
+        self.val_hist = val_hist
+
+    def fit(self, **kw):
+        self.train_LR(**kw)
+
 class adopt_like(nn.Module, ModelContainer): 
   def __init__(self, input_size, num_flights, flight_len,
                 window_step, sequence_length=20,
@@ -1038,7 +1276,7 @@ class precursor_model_BN(nn.Module, ModelContainer):
                       out_features=self.n_classes)
             )
 
-    def forward(self, x):
+    def forward(self, x, train=True):
         if not tc.is_tensor(x):
             x = tc.Tensor(x).to(self.device)
         else:
@@ -1088,7 +1326,7 @@ class precursor_model_BN(nn.Module, ModelContainer):
         self.use_stratified_batch_size = use_stratified_batch_size
         self.trainedModel, self.hist, self.val_hist = self.train_Precursor_binary(**kwargs)
 
-    def predict(self, x):
+    def predict(self, x, train=False):
         with tc.no_grad():
             if self.task == "binary":
                 if (self.device != "cpu") and (not next(self.parameters()).is_cuda):
@@ -1102,9 +1340,9 @@ class precursor_model_BN(nn.Module, ModelContainer):
                     except:
                         pass
                      
-                out = self.trainedModel(x)
+                out = self.trainedModel(x, train)
             else:
-                out = F.softmax(self.trainedModel(x), dim=1)
+                out = F.softmax(self.trainedModel(x, train), dim=1)
         return out
 
     def compute_window_size(self):
@@ -1331,7 +1569,7 @@ class precursor_model_BN_mc(nn.Module, ModelContainer):
         )
         self.pool = tc.nn.MaxPool1d(kernel_size=self.Wn)
 
-    def forward(self, x):
+    def forward(self, x, train=True):
         if not tc.is_tensor(x):
             x = tc.Tensor(x).to(self.device)
         else:
@@ -1369,6 +1607,8 @@ class precursor_model_BN_mc(nn.Module, ModelContainer):
         gru_out, _ = self.gru(self.precursor_proba, h_0)
         self.proba_time = self.Dense_final(self.tanh(gru_out))
         final_out = self.pool(self.proba_time.permute(0,2,1)).squeeze()
+        if not train:
+            self.proba_time = nn.Sigmoid()(self.proba_time)
 
         return final_out
 
@@ -1378,7 +1618,7 @@ class precursor_model_BN_mc(nn.Module, ModelContainer):
         self.use_stratified_batch_size = use_stratified_batch_size
         self.trainedModel, self.hist, self.val_hist = self.train_Precursor_mc(**kwargs)
 
-    def predict(self, x):
+    def predict(self, x, train=False):
         with tc.no_grad():
             if (self.device != "cpu") and (not next(self.parameters()).is_cuda):
                 try:
@@ -1391,8 +1631,8 @@ class precursor_model_BN_mc(nn.Module, ModelContainer):
                 except:
                     pass
 
-            out = self.trainedModel(x)
-            out_label = tc.argmax(out, dim=1)
+            out = self.trainedModel(x, train)
+            out_label = tc.argmax(out, dim=-1)
 
         return out, out_label
 

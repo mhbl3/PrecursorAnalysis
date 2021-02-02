@@ -1,25 +1,31 @@
 import argparse
-from .precursorModels.modelProcessing import precursor_model_BN, precursor_model_BN_mc
+from .precursorModels.modelProcessing import precursor_model_BN, precursor_model_BN_mc, MILLR
 import pickle as pkl
 import numpy as np
+from sklearn.metrics import classification_report
+import torch
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--model-type', type=str, choices= ["binary", "mc"],
+parser.add_argument('--model-type', type=str, choices=["lr_binary","imdope_binary", "imdope_mc"],
+                    default ="imdope_binary",
                     help='Model type')
 
 parser.add_argument('--lr', type=float, default=0.001,
                     help='learning rate')
-parser.add_argument('--l2', type=float, default = 0.001,
+
+parser.add_argument('--l2', type=float, default=0.001,
                     help='weight decay')
 
 parser.add_argument('--dropout', type=float, nargs="+", default=0.0,
                     help='weight decay')
 
 parser.add_argument('--ks', type=int, nargs='+', action="append",
+                    default=[8,5,4],
                     help='kernel size')
 
 parser.add_argument('--out-channels', type=int, nargs='+', action="append",
+                    default= [10, 15, 20],
                     help='Channels')
 
 parser.add_argument('--gru-hidden', type=int, default=5,
@@ -49,6 +55,9 @@ parser.add_argument('--epochs', type=int, default=30,
 parser.add_argument('--out-dir', type=str, default="./Data/dashlink/models",
                     help='output directory')
 
+parser.add_argument('--aggregation', type=str, default="maxpool",
+                    help='aggregation type for logistic regression model')
+
 parser.add_argument('--use-stratisfy', type=str, default=False,
                     help='True use stratisfied mini-batch strategy')
 
@@ -57,6 +66,9 @@ parser.add_argument('--verbose', type=int, default=1,
 
 parser.add_argument('--use-cuda', type=bool, default=False,
                     help='True uses cuda')
+
+parser.add_argument('--load-model', type=bool, default=False,
+                    help='Load pre-trained model')
 
 parser.add_argument('--model-name', type=str, default="my_model.pt",
                     help='Model file name')
@@ -67,6 +79,7 @@ ks = args.ks[0]
 out_channels = args.out_channels[0]
 gru_hidden_size = args.gru_hidden
 fourth_layer = args.fourth_layer
+aggregation = args.aggregation
 
 batch_size_percent = args.mini_batch_percent
 epochs = args.epochs
@@ -92,32 +105,50 @@ X_test, y_test = dc.testX, dc.testY
 
 
 # Define the container model
-if args.model_type == "mc":
-    model = precursor_model_BN_mc(input_size=X_train.shape[-1]-2,
-                              sequence_length=X_train.shape[1],
-                              kernel_size=ks, dropout=dropout, n_classes=args.n_classes,
-                              n_filters = out_channels, hidden_size=gru_hidden_size,
-                              fourth_layer=fourth_layer, device=device)
-else:
-    model = precursor_model_BN(input_size=X_train.shape[-1] - 2,
+if not args.load_model:
+    if args.model_type == "imdope_mc":
+        model = precursor_model_BN_mc(input_size=X_train.shape[-1]-2,
                                   sequence_length=X_train.shape[1],
-                                  kernel_size=ks, dropout=dropout,
-                                  n_filters=out_channels, hidden_size=gru_hidden_size,
+                                  kernel_size=ks, dropout=dropout, n_classes=args.n_classes,
+                                  n_filters = out_channels, hidden_size=gru_hidden_size,
                                   fourth_layer=fourth_layer, device=device)
 
+    elif args.model_type == "imdope_binary":
+        model = precursor_model_BN(input_size=X_train.shape[-1] - 2,
+                                      sequence_length=X_train.shape[1],
+                                      kernel_size=ks, dropout=dropout,
+                                      n_filters=out_channels, hidden_size=gru_hidden_size,
+                                      fourth_layer=fourth_layer, device=device)
 
-# Train model
-if args.include_val:
-    model.fit(batch_size=int(X_train.shape[0]*batch_size_percent),
-             X_train = X_train[:, :, :-2], y_train = y_train,
-             y_val=y_val, X_val=X_val.astype(np.float64)[:, :, :-2],
-             l2=reg_l2, learning_rate= lr, use_stratified_batch_size=make_batch_stratified,
-             clf = model, num_epochs = epochs, verbose= verbose,)
+    elif args.model_type=="lr_binary":
+        model = MILLR(input_dim=X_train.shape[-1] - 2,
+                      flight_length=X_train.shape[1],
+                      device=device,
+                      aggregation=aggregation)
+
+
+    # Train model
+    if args.include_val:
+        model.fit(batch_size=int(X_train.shape[0]*batch_size_percent),
+                 X_train = X_train[:, :, :-2], y_train = y_train,
+                 y_val=y_val, X_val=X_val.astype(np.float64)[:, :, :-2],
+                 l2=reg_l2, learning_rate= lr, use_stratified_batch_size=make_batch_stratified,
+                 clf = model, num_epochs = epochs, verbose= verbose,)
+    else:
+        model.fit(batch_size=int(X_train.shape[0] * batch_size_percent),
+                  X_train=X_train[:, :, :-2], y_train=y_train,
+                  l2=reg_l2, learning_rate=lr, use_stratified_batch_size=make_batch_stratified,
+                  clf=model, num_epochs=epochs, verbose=verbose, )
 else:
-    model.fit(batch_size=int(X_train.shape[0] * batch_size_percent),
-              X_train=X_train[:, :, :-2], y_train=y_train,
-              l2=reg_l2, learning_rate=lr, use_stratified_batch_size=make_batch_stratified,
-              clf=model, num_epochs=epochs, verbose=verbose, )
+    model = torch.load(f"./Data/{model_name}",
+                       map_location= device)
 
+if args.model_type == "imdope_binary":
+    yhat = model.predict(X_test[:,:,:-2]).cpu().detach().numpy()
+    yhat = (yhat > model.threshold).astype(int)
+else:
+    raise NotImplemented
 
-model.save(f"./Data/dashlink/models/{model_name}")
+print(classification_report(y_test, yhat))
+if not args.load_model:
+    model.save(f"./Data/{model_name}")

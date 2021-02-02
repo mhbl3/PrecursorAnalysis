@@ -63,18 +63,57 @@ class DataContainer():
         elif type(data) == list:
             nominal_directory = data[0]
             anomalous_directory = data[1]
-            files_nom = os.listdir(nominal_directory)
-            files_anom = os.listdir(anomalous_directory)
+            fix_path = kwargs.pop("fix_path", False)
+            if fix_path:
+                new_path = os.getcwd().replace("/", "\\").split("\\")
+                idx = [i for i, e in enumerate(new_path) if e =="PrecursorAnalysis"][0]
+                tmp = new_path[0]
+                for i, e in enumerate(new_path[1:], 1):
+                    if i <=idx:
+                        tmp = tmp +"/"+e
+                new_path = tmp
+                self.fixed_data_path = new_path
+                joined_nom  = os.path.join(new_path, nominal_directory.replace("/", "\\"))
+                files_nom = os.listdir(joined_nom)
+                joined_adv = os.path.join(new_path, anomalous_directory.replace("/","\\"))
+                files_anom = os.listdir(joined_adv)
+            else:
+                files_nom = os.listdir(nominal_directory)
+                files_anom = os.listdir(anomalous_directory)
             
             all_flight_list = []
             self.file_not_used = []
             verbose = kwargs.pop("verbose", 0)
-            
+            replace_name_target = kwargs.pop("replace_name_target", None)
+            random_int = np.random.randint(1, len(files_nom))
+
             for i, nom in enumerate(files_nom):
-                dir_temp = os.path.join(nominal_directory,nom)
+                if fix_path:
+                    dir_temp = os.path.join(joined_nom, nom)
+                else:
+                    dir_temp = os.path.join(nominal_directory,nom)
                 temp = pd.read_csv(dir_temp)
+                if replace_name_target is not None:
+                    string_to_use = "Anomaly"
+                    temp.rename(columns={f"{replace_name_target}":f"{string_to_use}"}, inplace=True)
+                tmp_cols = [i for i in temp.columns.values if i != "Anomaly"]
+                if "filename" not in tmp_cols:
+                    temp["filename"] = nom
+                    tmp_cols.append("filename")
+                if "flight_id" not in tmp_cols:
+                    temp["flight_id"] = 0 # will be replaced later
+                    tmp_cols.append("flight_id")
+                tmp_cols.append("Anomaly")
+                # Making the flight_id, and anomaly columns is at the end
+                temp = temp[tmp_cols]
+
                 if i == 0:
-                    self.max_len = len(temp)
+                    if fix_path:
+                        tmp_df = pd.read_csv(os.path.join(joined_nom, files_nom[random_int]))
+                    else:
+                        tmp_df = pd.read_csv(os.path.join(nominal_directory, files_nom[random_int]))
+                    self.max_len = len(tmp_df)
+
                     header = kwargs.pop("header", temp.columns)
                     print("Flight Length set to {}".format(self.max_len))
                     if verbose == 1:
@@ -90,8 +129,25 @@ class DataContainer():
                     self.file_not_used.append(dir_temp)
             
             for anom in files_anom:
-                dir_temp = os.path.join(anomalous_directory, anom)
+                if fix_path:
+                    dir_temp = os.path.join(joined_adv, anom)
+                else:
+                    dir_temp = os.path.join(anomalous_directory, anom)
                 temp = pd.read_csv(dir_temp)
+                if replace_name_target is not None:
+                    temp.rename(columns={f"{replace_name_target}":f"{string_to_use}"}, inplace=True)
+                tmp_cols = [i for i in temp.columns.values if i != "Anomaly"]
+                # Ideally the adverse event data should have the same throughout the whole flight
+                if 0 in temp.Anomaly.unique():
+                    temp["Anomaly"] = 1
+                if "filename" not in tmp_cols:
+                    temp["filename"] = anom
+                    tmp_cols.append("filename")
+                if "flight_id" not in tmp_cols:
+                    temp["flight_id"] = 0 # will be replaced later
+                    tmp_cols.append("flight_id")
+                tmp_cols.append("Anomaly")
+                # Making the flight_id, and anomaly columns is at the end
                 temp = temp[header]
                 flight_id = anom.split("_")[1].split(".")[0]
                 temp.flight_id = int(flight_id) # replace flight id
@@ -108,8 +164,8 @@ class DataContainer():
             self.df = pd.concat(all_flight_list)
         else:
             raise Exception("Loading for this data type is not available")
-
-        self.header = self.df.columns
+        if not hasattr(self, "header"):
+            self.header = self.df.columns
 
     def create_nominal_adverse_directories(self, path_to_data_directory, anomaly=1, 
                                            create_nominal_files=True, create_adverse_files=True,
@@ -195,9 +251,12 @@ class DataContainer():
         """
         if "pkl" not in filename:
             filename = filename + ".pkl"
+
+        if hasattr(self, "fixed_data_path"):
+            filename = os.path.join(self.fixed_data_path, filename)
         with open(filename, "wb") as f:
             pkl.dump(self, f)
-        print("Data Model Saved!")
+        print(f"Data Model Saved! (path: {filename})")
             
     def encodeData(self, type, columns=list):
         if type == "label":
@@ -416,9 +475,25 @@ class DataContainer():
         corr.drop(index=colsdropped, inplace=True)
 
         imp_cols = list(corr.columns)
-        imp_cols.append("filename")
-        imp_cols.append("Anomaly")
-        imp_cols.append("flight_id")
+        if "filename" not in imp_cols:
+            imp_cols.append("filename")
+        else:
+            #to keep order consistent
+            imp_cols.remove("filename")
+            imp_cols.append("filename")
+
+        if "flight_id" not in imp_cols:
+            imp_cols.append("flight_id")
+        else:
+            imp_cols.remove("flight_id")
+            imp_cols.append("flight_id")
+
+        if "Anomaly" not in imp_cols:
+            imp_cols.append("Anomaly")
+        else:
+            imp_cols.remove("Anomaly")
+            imp_cols.append("Anomaly")
+
         # DASHLink data specific problem 
         try:
             imp_cols.remove("Date (Day)")
@@ -604,26 +679,28 @@ class DataContainer():
 
         """
         # Save filenames 
-        filename_pos = np.where("filename"==self.header)[0][0]
+        remove_filename = kw.pop("remove_filename", True)
+        if remove_filename:
+            filename_pos = np.where("filename"==self.header)[0][0]
+            if self.using_val_data:
+                filenames = np.concatenate([self.trainX[:, 0, filename_pos],
+                                        self.valX[:, 0, filename_pos],
+                                        self.testX[:, 0, filename_pos]])
+            
+            else:
+                filenames = np.concatenate([self.trainX[:, 0, filename_pos],
+                                        self.testX[:, 0, filename_pos]])
+            self.filenames = filenames
+            # Remove filenames from X 
+            self.trainX = np.delete(self.trainX, filename_pos, axis=2)
+            if self.using_val_data:
+                self.valX = np.delete(self.valX, filename_pos, axis=2)
+            self.testX = np.delete(self.testX, filename_pos, axis=2)
+        method = kw.pop("scaling_method","zscore")
+        self.normalizeData(use_loaded_df=False, data_set="train", data = self.trainX, scaling_method=method)
         if self.using_val_data:
-            filenames = np.concatenate([self.trainX[:, 0, filename_pos],
-                                    self.valX[:, 0, filename_pos],
-                                    self.testX[:, 0, filename_pos]])
-        
-        else:
-            filenames = np.concatenate([self.trainX[:, 0, filename_pos],
-                                    self.testX[:, 0, filename_pos]])
-        self.filenames = filenames
-        # Remove filenames from X 
-        self.trainX = np.delete(self.trainX, filename_pos, axis=2)
-        if self.using_val_data:
-            self.valX = np.delete(self.valX, filename_pos, axis=2)
-        self.testX = np.delete(self.testX, filename_pos, axis=2)
-
-        self.normalizeData(use_loaded_df=False, data_set="train", data = self.trainX)
-        if self.using_val_data:
-            self.normalizeData(use_loaded_df=False, data_set="validation",  data = self.valX)
-        self.normalizeData(use_loaded_df=False, data_set="test", data = self.testX)
+            self.normalizeData(use_loaded_df=False, data_set="validation",  data = self.valX, scaling_method=method)
+        self.normalizeData(use_loaded_df=False, data_set="test", data = self.testX, scaling_method=method)
 
         # Performing sampling
         if sampling_method is not None:

@@ -34,20 +34,22 @@ class model_trial():
         self.ks = kwargs["kernel_size"]
         self.b_size_percent = kwargs["batch_size_percent"]
         self.out_channels = kwargs["n_filters"]
-        self.fourth_layer = kwargs["fourth_layer"]
-        self.BN = kwargs["use_batch_norm"]
+        self.gru_hidden_size = kwargs["gru_hidden_size"]
+        self.model_type = kwargs["model_type"]
         self.optimizer = kwargs["optimizer"]
         self.epochs = kwargs["epochs"]
+        self.dropout = kwargs["dropout"]
+        self.n_classes = kwargs["n_classes"]
+        self.aggregation = kwargs["aggregation"]
+
         dm = data_model
         self.header = dm.header
         
-        if np.unique(dm.trainY).shape[0] ==2:
+        if self.n_classes==1:
             self.task = "binary"
-            self.n_classes = 1 
         else:
             self.task = "multiclass"
-            self.n_classes = dm.df.Anomaly.unique().shape[0]
-        
+
         self.init_dict = kwargs
 
         with open(os.path.join(self.trial_directory, "Hyperparams.txt"), "w") as f:
@@ -55,22 +57,33 @@ class model_trial():
         self.start_time = time.time()
 
     def init_my_model(self, input_size, sequence_length, device):
-        if self.BN:
+        if self.model_type == "imdope_binary":
             self.trial_model = precursor_model_BN(input_size=input_size,
-                            sequence_length=sequence_length,
-                            kernel_size=self.ks,
-                            n_filters=self.out_channels,
-                            fourth_layer=self.fourth_layer,
-                            optimizer = self.optimizer, n_classes= self.n_classes,
-                            device = device)
-        else:
-            self.trial_model= precursor_model(input_size=input_size,
-                        sequence_length=sequence_length,
-                        kernel_size=self.ks,
-                        n_filters= self.out_channels,
-                        fourth_layer=self.fourth_layer,  n_classes= self.n_classes,
-                        optimizer = self.optimizer,
-                        device=device)
+                                  sequence_length=sequence_length,
+                                  kernel_size=self.ks,
+                                  dropout=self.dropout,
+                                  n_filters=self.out_channels,
+                                  hidden_size=self.gru_hidden_size,
+                                  fourth_layer="cnn",
+                                  device=device)
+
+        elif self.model_type== "imdope_mc":
+            self.trial_model= precursor_model_BN_mc(input_size=input_size,
+                                  sequence_length=sequence_length,
+                                  kernel_size=self.ks,
+                                  dropout=self.dropout,
+                                  n_classes=self.n_classes,
+                                  n_filters=self.out_channels,
+                                  hidden_size=self.gru_hidden_size,
+                                  fourth_layer="cnn",
+                                  device=device)
+
+        elif self.model_type == "lr_binary":
+            warnings.warn("Feature importance is not supported")
+            MILLR(input_dim=input_size,
+                  flight_length=sequence_length,
+                  device=device,
+                  aggregation=self.aggregation)
 
     def fit(self, load_trained_model= False, **kwargs):
         """
@@ -137,13 +150,19 @@ class model_trial():
 #         except:
 #           prediction_logits = prediction_logits.detach().numpy()
         prediction_logits = self.trial_model.evaluate_model(mode="train", )[0].cpu().detach().numpy()
-        prediction_train = (prediction_logits > self.trial_model.threshold).astype(int)
+        if self.n_classes == 1:
+            prediction_train = (prediction_logits > self.trial_model.threshold).astype(int)
+        else:
+            prediction_train = prediction_logits
         self.summary_results_train = pd.DataFrame(columns=["CM", "Balanced_Acc", "f1"],
                                             index=range(len(X_train)))
 #         confusion_matrix(y_train, prediction_train).flatten()
         self.summary_results_train.at[:, "CM"] = [confusion_matrix(y_train, prediction_train).flatten()] * len(X_train)
         self.summary_results_train.loc[:, "Balanced_Acc"] = balanced_accuracy_score(y_train, prediction_train)
-        self.summary_results_train.loc[:, "f1"] = f1_score(y_train, prediction_train, average="binary")
+        if self.n_classes == 1:
+            self.summary_results_train.loc[:, "f1"] = f1_score(y_train, prediction_train, average="binary")
+        else:
+            self.summary_results_train.loc[:, "f1"] = f1_score(y_train, prediction_train, average="weighted")
         self.summary_results_train.loc[:, "class"] = y_train
         self.summary_results_train.loc[:, "pred_class"] = prediction_train
         self.summary_results_train.loc[:, "loss"] = loss_train
@@ -158,22 +177,28 @@ class model_trial():
         self.y_val = y_val 
 
         # Eval
-        prediction_logits, _ = self.trial_model.evaluate_model(mode="val",)# batch_size=int(.10*X_val.shape[0]))
+        prediction_logits, _ = self.trial_model.evaluate_model(mode="val",)
         prediction_logits = prediction_logits.detach().numpy()
-        logic = prediction_logits > self.trial_model.threshold
-        prediction_val = np.asarray(logic).astype(int)
+        if self.n_classes == 1:
+            logic = prediction_logits > self.trial_model.threshold
+            prediction_val = np.asarray(logic).astype(int)
+        else:
+            prediction_val = prediction_logits
         
         # Basic Metrics
 #         self.prediction_val = (self.prediction_val > self.trial_model.threshold).astype(int)
-        CM_val = confusion_matrix(y_val, prediction_val)
-        balanced_accuracy_val = balanced_accuracy_score(y_val, prediction_val)
-        f1_val = f1_score(y_val, prediction_val, average="binary")
+#         CM_val = confusion_matrix(y_val, prediction_val)
+#         balanced_accuracy_val = balanced_accuracy_score(y_val, prediction_val)
+#         f1_val = f1_score(y_val, prediction_val, average="binary")
         
         self.summary_results_val = pd.DataFrame(columns=["CM", "Balanced_Acc", "f1"],
                                                   index=range(len(X_val)))
         self.summary_results_val.at[:, "CM"] = [confusion_matrix(y_val, prediction_val).flatten()] * len(X_val)
         self.summary_results_val.loc[:, "Balanced_Acc"] = balanced_accuracy_score(y_val, prediction_val)
-        self.summary_results_val.loc[:, "f1"] = f1_score(y_val, prediction_val, average="binary")
+        if self.n_classes == 1:
+            self.summary_results_val.loc[:, "f1"] = f1_score(y_val, prediction_val, average="binary")
+        else:
+            self.summary_results_val.loc[:, "f1"] = f1_score(y_val, prediction_val, average="weighted")
         self.summary_results_val.loc[:, "class"] = y_val
         self.summary_results_val.loc[:, "pred_class"] = prediction_val
         
@@ -181,29 +206,34 @@ class model_trial():
 
         # Comparing overlap with ADOPT
         if path_to_ADOPT_run is None:
-            path_to_ADOPT_run = "/content/drive/My Drive/MS Thesis/ADOPT/HS_case/output/run_1"
+            path_to_ADOPT_run = ["/content/drive/My Drive/MS Thesis/ADOPT/HS_case/output/run_1",
+                                 "/content/drive/My Drive/MS Thesis/ADOPT/HP_case/output/run_1"]
 
         # Go through training data
 #         self.trial_model.predict(self.X_train[:, :, :-2]) gets proba
 #         proba_time = self.trial_model.proba_time.detach().numpy() 
-        _, proba_time = self.trial_model.evaluate_model(mode="train",
+        y_hat, proba_time = self.trial_model.evaluate_model(mode="train",
             get_important_features=False)
         # self.deviation_df_train = pd.DataFrame(columns=["N_time_steps_deviation", "miles_deviation"],
         #                                  index=range(self.X_train.shape[0]))
         self.summary_results_train["N_time_steps_deviation"] = np.nan
         self.summary_results_train["miles_deviation"] = np.nan
-        idx_adverse = np.where(self.y_train==1)[0]
+        idx_adverse = np.where(self.y_train!=0)[0]
         deviation_lst = []
         deviation_miles_lst = [] 
         flight_id_lst = [] 
         path = ""
         
-        for flight_idx in tqdm(idx_adverse):
+        for e, flight_idx in enumerate(tqdm(idx_adverse)):
             temp_proba_time = window_padding(proba_time[flight_idx, :].flatten()
                             , self.X_train.shape[1])
             # get ADOPT score
             flight_id = int( self.X_train[flight_idx, 0, -1])
-            path = os.path.join(path_to_ADOPT_run, "parameter_graphs", "precursor_score__data_{}.pkl".format(flight_id))
+            if self.n_classes ==1:
+                adopt_idx = 0
+            else:
+                adopt_idx = max(0, int(y_hat[e]-1)) # assumes normal is the same for both
+            path = os.path.join(path_to_ADOPT_run[adopt_idx], "parameter_graphs", "precursor_score__data_{}.pkl".format(flight_id))
             if os.path.exists(path):
               with open(path, "rb") as f :
                 temp_ADOPT_proba_Time = pkl.load(f)
@@ -239,23 +269,27 @@ class model_trial():
 #         self.trial_model.predict(self.X_val[:, :, :-2])  gets proba
 #         proba_time = self.trial_model.proba_time.detach().numpy()
 
-        _, proba_time = self.trial_model.evaluate_model(mode="val",
+        y_hat, proba_time = self.trial_model.evaluate_model(mode="val",
             get_important_features=False)
         # self.deviation_df_train = pd.DataFrame(columns=["N_time_steps_deviation", "miles_deviation"],
         #                                  index=range(self.X_train.shape[0]))
         self.summary_results_val["N_time_steps_deviation"] = np.nan
         self.summary_results_val["miles_deviation"] = np.nan
-        idx_adverse = np.where(self.y_val == 1)[0]
+        idx_adverse = np.where(self.y_val != 0)[0]
         deviation_lst = []
         deviation_miles_lst = [] 
         flight_id_lst = [] 
         
-        for flight_idx in tqdm(idx_adverse):
+        for e, flight_idx in enumerate(tqdm(idx_adverse)):
             temp_proba_time = window_padding(proba_time[flight_idx, :].flatten()
                                              , self.X_val.shape[1])
             # get ADOPT score
             flight_id = int(self.X_val[flight_idx, 0, -1])
-            path = os.path.join(path_to_ADOPT_run, "parameter_graphs", "precursor_score__data_{}.pkl".format(flight_id))
+            if self.n_classes ==1:
+                adopt_idx = 0
+            else:
+                adopt_idx = max(0, int(y_hat[e]-1)) # assumes normal is the same for both
+            path = os.path.join(path_to_ADOPT_run[adopt_idx], "parameter_graphs", "precursor_score__data_{}.pkl".format(flight_id))
             if os.path.exists(path):
               with open(path, "rb") as f:
                   temp_ADOPT_proba_Time = pkl.load(f)
@@ -278,7 +312,6 @@ class model_trial():
                 
             deviation_lst.append(deviation)
             deviation_miles_lst.append(deviation * 0.25)
-#             print(flight_id)
             flight_id_lst.append(flight_id)
 
         self.summary_results_val.loc[idx_adverse, "N_time_steps_deviation"] =  np.asarray(deviation_lst)
@@ -287,32 +320,37 @@ class model_trial():
 
     def evaluate_best_feature_overlap(self, path_to_ADOPT_run=None):
         if path_to_ADOPT_run is None:
-            path_to_ADOPT_run = "/content/drive/My Drive/MS Thesis/ADOPT/HS_case/output/run_1"
+            path_to_ADOPT_run = ["/content/drive/My Drive/MS Thesis/ADOPT/HS_case/output/run_1",
+                                 "/content/drive/My Drive/MS Thesis/ADOPT/HP_case/output/run_1"]
 
         # Training
 #         self.trial_model.predict(self.X_train[:, :, :-2])
         self.trial_model.header = self.header 
-        _, _, top_features_list, top_features_values_list = self.trial_model.evaluate_model(mode="train",
+        y_hat, _, top_features_list, top_features_values_list = self.trial_model.evaluate_model(mode="train",
             get_important_features=True)
         self.summary_results_train["n_common_features"] = np.nan
         self.summary_results_train["top_features"] = np.nan
         self.summary_results_train["top_features_ADOPT"] = np.nan
-        idx_adverse = np.where(self.y_train==1)[0]
+        idx_adverse = np.where(self.y_train!=0)[0]
         self.ADOPT_not_found = []
         print("Looking for ADOPT Data")
-        for flight_idx in tqdm(idx_adverse):
+        for e, flight_idx in enumerate(tqdm(idx_adverse)):
             flight_id = int(self.X_train[flight_idx, 0, -1])
+            if self.n_classes ==1:
+                adopt_idx = 0
+            else:
+                adopt_idx = max(0, int(y_hat[e]-1)) # assumes normal is the same for both
 #             self.trial_model.show_feature_importance(self.header, flight_idx, plot=False)
             top_features = top_features_list[flight_idx]
             top_features_values = top_features_values_list[flight_idx]
             # Get Adopt top 10
-            path_ADOPT_train = os.path.join(path_to_ADOPT_run, "feature_ranking", f"Anomalous_Train_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
-            path_ADOPT_train_2 = os.path.join(path_to_ADOPT_run, "feature_ranking", f"Anomalous_Train_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
-            path_ADOPT_test = os.path.join(path_to_ADOPT_run, "feature_ranking", f"Anomalous_Test_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
-            path_ADOPT_test_2 = os.path.join(path_to_ADOPT_run, "feature_ranking", f"Anomalous_Test_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
-            path_ADOPT_val = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_train = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking", f"Anomalous_Train_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
+            path_ADOPT_train_2 = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking", f"Anomalous_Train_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
+            path_ADOPT_test = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking", f"Anomalous_Test_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
+            path_ADOPT_test_2 = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking", f"Anomalous_Test_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
+            path_ADOPT_val = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                            f"Anomalous_Validation_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
-            path_ADOPT_val_2 = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_val_2 = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                              f"Anomalous_Validation_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
             path = ""
             if os.path.exists(path_ADOPT_train):
@@ -355,15 +393,19 @@ class model_trial():
 
         # Validation
 #         self.trial_model.predict(self.X_val[:, :, :-2])
-        _, _, top_features_list, top_features_values_list = self.trial_model.evaluate_model(mode="val",
+        y_hat, _, top_features_list, top_features_values_list = self.trial_model.evaluate_model(mode="val",
             get_important_features=True)
         self.summary_results_val["n_common_features"] = np.nan
         self.summary_results_val["top_features"] = np.nan
         self.summary_results_val["top_features_ADOPT"] = np.nan
         idx_adverse = np.where(self.y_val==1)[0]
 
-        for flight_idx in tqdm(idx_adverse):
+        for e, flight_idx in enumerate(tqdm(idx_adverse)):
             flight_id = int(self.X_val[flight_idx, 0, -1])
+            if self.n_classes ==1:
+                adopt_idx = 0
+            else:
+                adopt_idx = max(0, int(y_hat[e]-1)) # assumes normal is the same for both
 #             self.trial_model.show_feature_importance(self.header, flight_idx, plot=False)
 #             top_features = self.trial_model.sorted_features
 #             top_features_values = self.trial_model.sorted_features_values
@@ -371,17 +413,17 @@ class model_trial():
             top_features_values = top_features_values_list[flight_idx]
             # Get Adopt top 10
             path = ""
-            path_ADOPT_train = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_train = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                             f"Anomalous_Train_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
-            path_ADOPT_train_2 = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_train_2 = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                               f"Anomalous_Train_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
-            path_ADOPT_test = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_test = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                            f"Anomalous_Test_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
-            path_ADOPT_test_2 = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_test_2 = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                              f"Anomalous_Test_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
-            path_ADOPT_val = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_val = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                           f"Anomalous_Validation_ranking_data_{flight_id}.pdf_data_{flight_id}.pkl")
-            path_ADOPT_val_2 = os.path.join(path_to_ADOPT_run, "feature_ranking",
+            path_ADOPT_val_2 = os.path.join(path_to_ADOPT_run[adopt_idx], "feature_ranking",
                                             f"Anomalous_Validation_ranking_data_{flight_id}_precursor_event_0.pdf_data_{flight_id}_precursor_event_0.pkl")
 
             if os.path.exists(path_ADOPT_train):
@@ -463,10 +505,14 @@ def tuning_wraper(data, input, load_trained_model=False,
     
     if run_methods[0]:
         print("Evaluating Time Overlaps")
+        if mt.n_classes >1:
+            warnings.warn("Inaccurate feature importance of imdope may be calculated. Change n_classes to 1")
         mt.evaluate_ADOPT_overlap(path_to_ADOPT_run)
         
     if run_methods[1]:
         print("Evaluating Feature Overlaps")
+        if mt.n_classes >1:
+            warnings.warn("Inaccurate feature importance of imdope may be calculated. Change n_classes to 1")
         mt.evaluate_best_feature_overlap(path_to_ADOPT_run)
         
     if run_methods[2]:
@@ -562,8 +608,13 @@ def train_test_results_selection(df, combination, path_data,
     list_extra = [] 
     for i, tupl in enumerate(zip(tops_Values, tops)):
         top_val, top = tupl
-        if temp_df.pred_class[i] == 1:
-            if (pd.notna(top_ADOPT.iloc[i])) and (pd.notna(top_ADOPT_values.iloc[i])):
+        # Check if values or precursors are ok
+        mse_calc_ok = False
+        if isinstance(top, str) and isinstance(top_val, str):
+            if ("None" not in top ) and ("None" not in top_val):
+                mse_calc_ok = True
+        if temp_df.pred_class[i] != 0:
+            if (pd.notna(top_ADOPT.iloc[i])) and (pd.notna(top_ADOPT_values.iloc[i])) and (mse_calc_ok):
                 mse, se, _, _, list_extra= feature_ranking_mse(top_val,
                                                    top,
                                                    top_ADOPT_values.iloc[i],
@@ -580,7 +631,7 @@ def train_test_results_selection(df, combination, path_data,
     if train_results:
         df.loc[combination, "MSE"] = mse_combination
     else:
-        df.loc[combination, "MSE"] = (df.loc[combination, "MSE"] + mse_combination) / 2  # avg across train/val
+        df.loc[combination, "MSE"] = mse_combination
 
     se_combination = np.nanmean(se_np, axis=1)
     sorted_features = [feat for feat in sorted(make_list(feats), key=lambda x: x.lower())]
@@ -647,7 +698,7 @@ def feature_ranking_mse(myRanking, myRankingColumns, adoptRanking, adoptColumns)
     try:
       myRankingVal = (myRankingVal - myRankingVal.min()) / (myRankingVal.max() - myRankingVal.min())
     except:
-      return np.nan, np.nan, np.nan, np.nan
+      return np.nan, np.nan, np.nan, np.nan, np.nan
 
     try:
         adoptColumns.remove("Unnamed: 0")

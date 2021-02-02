@@ -7,6 +7,7 @@ from tqdm import tqdm
 import warnings 
 import torch
 from sklearn.decomposition import PCA
+import pickle as pkl
 
 
 def window_padding(data_to_pad, full_length, method="interp"):
@@ -930,3 +931,17 @@ def one_hot_embedding(labels, num_classes):
     """
     y = torch.eye(num_classes)
     return y[labels]
+
+def change_df_index(df, path_save=None,index=None, anomaly=0):
+    df_reduced = df[df.Anomaly == anomaly]
+    if index == None:
+        index = np.arange(20, -.25, -.25)
+    df_list = []
+    for id in df_reduced.flight_id.unique():
+        df = df_reduced[df_reduced.flight_id == id]
+        df.index = index
+        df_list.append(df)
+    df_reduced = pd.concat(df_list)
+    if path_save is not None:
+        df_reduced.to_csv(path_save)
+    return df_reduced
