@@ -3,6 +3,7 @@ This package is currently work in progress. The project is projected to be compl
 
 # Data processing
 ```
+cd ../PrecursorAnalysis
 python -m imdope.buildDataModel --nominal-directory"Data/toy_data/nominal_events" --adverse-directory "Data/toy_data/adverse_events" --verbose 1 --correlation-thres 0.9 --target-feature "Label"
 ```
 Expected output of data processing using IM-DoPE:
