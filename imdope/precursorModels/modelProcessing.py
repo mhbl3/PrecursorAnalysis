@@ -114,7 +114,7 @@ class ModelContainer():
                 plt.grid(True)
 
                 if plot_save is not None:
-                    plt.rcParams['font.size'] = '20'
+                    # plt.rcParams['font.size'] = '20'
                     plt.savefig(plot_save, dpi=600)
                 plt.show()
 
@@ -157,7 +157,7 @@ class ModelContainer():
                     plt.grid(True)
 
                     if plot_save is not None:
-                        plt.rcParams['font.size'] = '20'
+                        # plt.rcParams['font.size'] = '20'
                         plt.savefig(plot_save.replace(".png", f"_{e}.png"), dpi=600)
                     plt.show()
     
