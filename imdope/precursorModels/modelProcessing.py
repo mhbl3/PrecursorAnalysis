@@ -46,7 +46,7 @@ class ModelContainer():
                                 class_interest = None,
                                 show_largest_change= False,
                                 plot_save = None,
-                                plot = True,figsize= (12,10)):
+                                plot = True,figsize= (7,5)):
         """
         To be used only when a precursor subclass was created
 
