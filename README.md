@@ -66,6 +66,6 @@ python -m imdope.precursorIdentification --filename "./Data/MyDataContainer_MIL.
 ```
 The precursor will be extracted directly from the model architecture as described in the paper
 List of outputs:
-- [Feature ranking](Data/Flight_19_Anomaly1/predictors_ranking.pdf)
+- [Feature ranking](Data/Flight_19_Anomaly1/precursor_rankings.pdf)
 - [CNN feature map](Data/Flight_19_Anomaly1/precursor_proba.pdf)
 - [Feature means and standard deviations](Data/Flight_19_Anomaly1/flight_parameters.pdf)
