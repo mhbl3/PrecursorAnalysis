@@ -58,7 +58,7 @@ if out > model.threshold:
     model.show_feature_importance(datacontainer.header,
                                   flight_id=0,
                                   class_interest=anomaly,
-                                  plot_save=os.path.join(out_folder,"predictors_ranking.pdf"))
+                                  plot_save=os.path.join(out_folder,"precursor_rankings.pdf"))
 
     model.plot_feature_effects(datacontainer.max_len, datacontainer.header,
                             flight_id=0,
