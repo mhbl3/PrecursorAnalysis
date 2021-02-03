@@ -185,7 +185,7 @@ def plot_feature_importance(f_weights, columns,
 
 def plot_feature_effects_no_effects(proba_time, flight_id, unormalized_data,
                          columns, mus, sigmas, c=3, ytick_one=True, show_precursor_range=False, features_to_show=None,
-                         save_path=None):
+                         save_path=None, **kw):
  """
     Plots the precursor score over for each feature for the specified flight
 
@@ -215,6 +215,7 @@ def plot_feature_effects_no_effects(proba_time, flight_id, unormalized_data,
  """  
  # Initializations
  assert type(unormalized_data) == np.ndarray
+ ticks_on = kw.get("ticks_on", True)
  if features_to_show is not None:
     assert (len(features_to_show) > 4)
  counter = 0
@@ -269,9 +270,10 @@ def plot_feature_effects_no_effects(proba_time, flight_id, unormalized_data,
              ax1[i,j].grid(True)
              ax1[i,j].set_xlabel("Distance to Event (nm)")
             #  ax1[i,j].set_yticks(np.arange(0, 1.1, 0.1))
-             x = np.arange(20 , -0.25, -0.25)
-             ax1[i,j].set_xticks(range(0, l, 10))
-             ax1[i,j].set_xticklabels(x[::10])
+             if ticks_on:
+                 x = np.arange(20 , -0.25, -0.25)
+                 ax1[i,j].set_xticks(range(0, l, 10))
+                 ax1[i,j].set_xticklabels(x[::10])
              if show_precursor_range:
                 if len(r_proba_time.shape) > 1:
                     mask_idx = np.where(r_proba_time[0,:] > 0.5)[0]
@@ -294,10 +296,11 @@ def plot_feature_effects_no_effects(proba_time, flight_id, unormalized_data,
          ax1[i,j].set_title(f"Feature: {columns[counter]}")
          ax1[i,j].set_xlabel("Distance to Event (nm)")
          ax1[i,j].grid(True)
-         
-         x = np.arange(20 , -0.25, -0.25)
-         ax1[i,j].set_xticks(range(0, l, 10))
-         ax1[i,j].set_xticklabels(x[::10])
+
+         if ticks_on:
+             x = np.arange(20 , -0.25, -0.25)
+             ax1[i,j].set_xticks(range(0, l, 10))
+             ax1[i,j].set_xticklabels(x[::10])
          counter += 1
          if show_precursor_range:
             if len(r_proba_time.shape) > 1:

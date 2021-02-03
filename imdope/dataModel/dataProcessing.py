@@ -644,8 +644,12 @@ class DataContainer():
 
         if mle:
             # temporal Gaussians
+            if "filename" in df.columns:
+                e = 3
+            else:
+                e = 2
             for i in range(n_pts):
-                for j in range(df.shape[1] - 2):
+                for j in range(df.shape[1] - e):
                     vector = nominal_fl.iloc[i::n_pts, j]  # Make sure you're using unscaled values
                     mus_temporal[i, j], sigmas_temporal[i, j] = norm.fit(vector)
         else:

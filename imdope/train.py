@@ -75,8 +75,8 @@ parser.add_argument('--model-name', type=str, default="my_model.pt",
 
 args = parser.parse_args()
 
-ks = args.ks[0]
-out_channels = args.out_channels[0]
+ks = args.ks[-1]
+out_channels = args.out_channels[-1]
 gru_hidden_size = args.gru_hidden
 fourth_layer = args.fourth_layer
 aggregation = args.aggregation

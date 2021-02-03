@@ -45,6 +45,7 @@ class ModelContainer():
                                 remove_constant=False,
                                 class_interest = None,
                                 show_largest_change= False,
+                                plot_save = None,
                                 plot = True,figsize= (30,30)):
         """
         To be used only when a precursor subclass was created
@@ -73,7 +74,7 @@ class ModelContainer():
             #FIXME fix this issue
             proba_time = window_padding(proba_time[flight_id,:].flatten(), self.x_train.shape[1])
         else:
-            if class_interest is None:
+            if (class_interest is None) or (self.n_classes==1):
                 proba_time = proba_time[flight_id, :]
             else:
                 #TODO: Check shape
@@ -112,6 +113,9 @@ class ModelContainer():
                 plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
                 plt.grid(True)
                 plt.show()
+                if plot_save is not None:
+                    plt.savefig(plot_save, dpi=600)
+
                 
             self.sorted_features = columns[sorted_avg].values
             self.sorted_features_values = precursor_proba_val_to_plot[sorted_avg]
@@ -150,6 +154,8 @@ class ModelContainer():
                     plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
                     plt.grid(True)
                     plt.show()
+                    if plot_save is not None:
+                        plt.savefig(plot_save, dpi=600)
 
     
         
@@ -174,8 +180,9 @@ class ModelContainer():
                             flight_id=0, save_path=None,
                             class_interest = None,
                             show_precursor_range=False,
-                            rescaling_factor = 0):
-        # Initializations 
+                            rescaling_factor = 0, **kw):
+        # Initializations
+         ticks_on = kw.get("ticks_on", True)
          counter = 0
          width = 4*5.5
          if "cuda" in self.device:
@@ -232,8 +239,9 @@ class ModelContainer():
                          ax1[i,j].grid(True)
                          ax1[i,j].set_xlabel("Distance to event")
                          ax1[i,j].set_yticks(np.arange(0, 1.1, 0.1))
-                         x = np.arange(20 , -0.25, -0.25)
-                         ax1[i,j].set_xticks(range(0, full_length, 10))
+                         if ticks_on:
+                             x = np.arange(20 , -0.25, -0.25)
+                             ax1[i,j].set_xticks(range(0, full_length, 10))
 
                          if (show_precursor_range) and (grey_area_class_plot_idx==class_idx):
                              if where_jump.shape[0] == 0:
@@ -243,7 +251,8 @@ class ModelContainer():
                                  split_time_masks = np.split(mask_idxs, where_jump)
                                  for mask_idx in split_time_masks:
                                      ax1[i,j].axvspan(mask_idx[0], mask_idx[-1], alpha=0.3, color='grey')
-                         ax1[i,j].set_xticklabels(x[::10])
+                         if ticks_on:
+                            ax1[i,j].set_xticklabels(x[::10])
 
                      continue
                  if counter == n_features:
@@ -264,9 +273,10 @@ class ModelContainer():
                  ax1[i,j].set_ylabel("Probabilities")
                  ax1[i,j].grid(True)
                  ax1[i,j].set_yticks(np.arange(0, 1.1, 0.1))
-                 x = np.arange(20 , -0.25, -0.25)
-                 ax1[i,j].set_xticks(range(0, full_length, 10))
-                 ax1[i,j].set_xticklabels(x[::10])
+                 if ticks_on:
+                     x = np.arange(20 , -0.25, -0.25)
+                     ax1[i,j].set_xticks(range(0, full_length, 10))
+                     ax1[i,j].set_xticklabels(x[::10])
                  if show_precursor_range:
                      if where_jump.shape[0] == 0:
                           ax1[i,j].axvspan(mask_idx[0], mask_idx[-1], alpha=0.3, color='grey')
