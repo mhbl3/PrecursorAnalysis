@@ -46,7 +46,7 @@ class ModelContainer():
                                 class_interest = None,
                                 show_largest_change= False,
                                 plot_save = None,
-                                plot = True,figsize= (30,30)):
+                                plot = True,figsize= (12,10)):
         """
         To be used only when a precursor subclass was created
 
@@ -112,9 +112,11 @@ class ModelContainer():
                 plt.barh(range(len(sorted_avg)), precursor_proba_val_to_plot[sorted_avg][::-1])
                 plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
                 plt.grid(True)
-                plt.show()
+
                 if plot_save is not None:
+                    plt.rcParams['font.size'] = '20'
                     plt.savefig(plot_save, dpi=600)
+                plt.show()
 
                 
             self.sorted_features = columns[sorted_avg].values
@@ -125,7 +127,7 @@ class ModelContainer():
             split_time_masks = np.split(time_step_masks, where_jump)
             self.list_sorted_features = []
             self.list_sorted_features_values = []
-            for time_step_mask in split_time_masks:
+            for e, time_step_mask in enumerate(split_time_masks):
                 self.first_flag_index = time_step_mask[0]
                 temp = precursor_proba[flight_id, time_step_mask, :]
 
@@ -153,10 +155,11 @@ class ModelContainer():
                     plt.barh(range(len(sorted_avg)), precursor_proba_val_to_plot[sorted_avg][::-1])
                     plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
                     plt.grid(True)
-                    plt.show()
-                    if plot_save is not None:
-                        plt.savefig(plot_save, dpi=600)
 
+                    if plot_save is not None:
+                        plt.rcParams['font.size'] = '20'
+                        plt.savefig(plot_save.replace(".png", f"_{e}.png"), dpi=600)
+                    plt.show()
     
         
     def save(self, filename):
