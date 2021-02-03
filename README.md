@@ -1,7 +1,7 @@
 # Work in Progress
 This package is currently work in progress. The project is projected to be completed by May 2021. A version of this work was published at the [AIAA SciTech 2021 Forum](https://arc.aiaa.org/doi/abs/10.2514/6.2021-0776)
 
-# PrecursorAnalysis
+# Precursor Analysis Overview
 Identification and analysis of precursors of time-series using the Intelligent Methodology for the Discovery of Precursor of adverse Events (IM-DoPE). 
 ![IM-DoPE](img/IMDOPE.jpg)
 
