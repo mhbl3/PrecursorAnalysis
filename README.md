@@ -37,7 +37,7 @@ The model can be trained directly from the root of the repo using:
 ```
 cd ../PrecursorAnalysis
 python -m imdope.train --model-type "imdope_binary" --lr 0.001 --l2 0.01 --ks 8 5 3 --out-channels 10 15 20 --use-str
-atisfy True --model-name "test_model.pt" --epochs 100 --data-container "./Data/MyDataContainer_MIL.pkl" --use-cuda True --mini-batch-percent 0.25
+atisfy True --model-name "test_model.pt" --epochs 100 --data-container "./Data/MyDataContainer_MIL.pkl" --use-cuda True --mini-batch-percent 0.10
 
 ```
 # Using pre-trained model
@@ -66,6 +66,6 @@ python -m imdope.precursorIdentification --filename "./Data/MyDataContainer_MIL.
 ```
 The precursor will be extracted directly from the model architecture as described in the paper
 List of outputs:
-- [Feature ranking](Data/Flight_19_Anomaly1/predictors_ranking.pdf)
+- [Feature ranking](Data/Flight_19_Anomaly1/precursor_rankings.pdf)
 - [CNN feature map](Data/Flight_19_Anomaly1/precursor_proba.pdf)
 - [Feature means and standard deviations](Data/Flight_19_Anomaly1/flight_parameters.pdf)
