@@ -44,7 +44,24 @@ class DataContainer():
         if type(data) == str and "csv" in data.lower():
             self.df = pd.read_csv(data, **kwargs)
         elif type(data) == pd.DataFrame:
-            self.df = data
+            header = kwargs.pop("header", data.columns)
+            self.df = data[header]
+            self.file_not_used = []
+            unique_files = self.df.filename.unique()
+            self.max_len = self.df[self.df.filename== unique_files[kwargs.pop("file_idx", 0)]].shape[0]
+
+            filesarray = self.df.groupby("filename")["Anomaly"].count()[self.df.groupby("filename")["Anomaly"].count() == self.max_len].index.values
+            self.df = self.df[self.df.filename.isin(filesarray)]
+            flight_ids = self.df.groupby(["filename"])["Anomaly"].ngroup().values - \
+                         self.df.groupby(["filename"])["Anomaly"].ngroup().values[0]
+            self.df.flight_id = flight_ids
+
+            # for j, i in enumerate(unique_files):
+            #     if self.df[self.df.filename==i].shape[0] != self.max_len:
+            #         self.file_not_used.append(self.df[self.df.flight_id==i].filename)
+            #         self.df = self.df[self.df.filename != i] # remove from DF
+            #     else:
+            #         self.df[self.df.filename == i].flight_id = j
         elif type(data)== np.ndarray:
             self.df = pd.DataFrame(data, **kwargs)
         elif type(data)==str and "pkl" in data.lower():
@@ -139,7 +156,7 @@ class DataContainer():
                 tmp_cols = [i for i in temp.columns.values if i != "Anomaly"]
                 # Ideally the adverse event data should have the same throughout the whole flight
                 if 0 in temp.Anomaly.unique():
-                    temp["Anomaly"] = 1
+                    temp["Anomaly"] = temp.Anomaly.unique()[1] # label of the anomaly
                 if "filename" not in tmp_cols:
                     temp["filename"] = anom
                     tmp_cols.append("filename")
@@ -147,7 +164,7 @@ class DataContainer():
                     temp["flight_id"] = 0 # will be replaced later
                     tmp_cols.append("flight_id")
                 tmp_cols.append("Anomaly")
-                # Making the flight_id, and anomaly columns is at the end
+                # Putting the flight_id, and anomaly columns is at the end
                 temp = temp[header]
                 flight_id = anom.split("_")[1].split(".")[0]
                 temp.flight_id = int(flight_id) # replace flight id
@@ -622,7 +639,7 @@ class DataContainer():
         self.trainY, self.testY = y_train, y_test
         self.testIndex = x_test_idx
 
-    def nom_flights_mean_std(self, mle=True):
+    def nom_flights_mean_std(self, mle=True, anomaly=0):
         """
         Finds the mean and standard variation for each time-step (temporal mean and standard deviation).         
 
@@ -638,9 +655,13 @@ class DataContainer():
         """
         n_pts = self.max_len
         df = self.df
-        mus_temporal = np.zeros((n_pts, df.shape[1] - 2))
-        sigmas_temporal = np.zeros((n_pts, df.shape[1] - 2))
-        nominal_fl = df[df.Anomaly == 0]
+        if "filename" in df.columns:
+            mus_temporal = np.zeros((n_pts, df.shape[1] - 3))
+            sigmas_temporal = np.zeros((n_pts, df.shape[1] - 3))
+        else:
+            mus_temporal = np.zeros((n_pts, df.shape[1] - 2))
+            sigmas_temporal = np.zeros((n_pts, df.shape[1] - 2))
+        fl = df[df.Anomaly == anomaly]
 
         if mle:
             # temporal Gaussians
@@ -650,13 +671,16 @@ class DataContainer():
                 e = 2
             for i in range(n_pts):
                 for j in range(df.shape[1] - e):
-                    vector = nominal_fl.iloc[i::n_pts, j]  # Make sure you're using unscaled values
+                    vector = fl.iloc[i::n_pts, j]  # Make sure you're using unscaled values
                     mus_temporal[i, j], sigmas_temporal[i, j] = norm.fit(vector)
         else:
             #TODO: Implement non-mle way
             raise NotImplementedError
-        self.mus = mus_temporal
-        self.sigmas = sigmas_temporal
+        if anomaly ==0:
+            self.mus = mus_temporal
+            self.sigmas = sigmas_temporal
+        else:
+            return mus_temporal, sigmas_temporal
         
     def normalize_resample_data(self, sampling_method=None,**kw):
         """

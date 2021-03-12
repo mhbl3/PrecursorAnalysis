@@ -42,11 +42,11 @@ class ModelContainer():
     
     def show_feature_importance(self, columns, flight_id=0,
                                 adjust_proba_window=False,
-                                remove_constant=False,
+                                # remove_constant=False,
                                 class_interest = None,
                                 show_largest_change= False,
-                                plot_save = None,
-                                plot = True,figsize= (7,5)):
+                                plot_save = None, LIMIT=None,
+                                plot = True,figsize= (10,10)):
         """
         To be used only when a precursor subclass was created
 
@@ -71,28 +71,27 @@ class ModelContainer():
             proba_time = self.proba_time.detach().numpy()
             precursor_proba = self.precursor_proba.detach().numpy()
         if adjust_proba_window:
-            #FIXME fix this issue
-            proba_time = window_padding(proba_time[flight_id,:].flatten(), self.x_train.shape[1])
+            raise NotImplementedError
+            # proba_time = window_padding(proba_time[flight_id,:].flatten(), self.x_train.shape[1])
         else:
             if (class_interest is None) or (self.n_classes==1):
                 proba_time = proba_time[flight_id, :]
             else:
-                #TODO: Check shape
                 if (len(proba_time.shape) ==3) and (class_interest is not None):
                     proba_time = proba_time[flight_id, :, class_interest]
                 elif (len(proba_time.shape) ==3) and (class_interest is None):
                     raise ValueError("class_interest is not set")
-        time_step_masks = np.where(proba_time > self.threshold)[0]
-        diff_time_step_masks = np.diff(time_step_masks)
-        where_jump = np.where(diff_time_step_masks > 1)[0] +1
+        time_step_masks = np.where(proba_time > self.threshold)[0] # proba_time.shape= N,T |  [True True False False True True]
+        diff_time_step_masks = np.diff(time_step_masks) # [0, -1, 0, 1, 0]
+        where_jump = np.where(diff_time_step_masks > 1)[0] +1 # 3 + 1 =  np.array([4])
         # self.first_flag_index = []
-        self.multiple_precursors = [True if where_jump.shape[0] == 0 else False][0]
+        self.multiple_precursors = [False if where_jump.shape[0] == 0 else True][0]
 
         # Search where precursor proba > threshold and obtain feature precursor score
-        if where_jump.shape[0] == 0:
+        if where_jump.shape[0] == 0: # if empty then only precursor
             time_step_mask = time_step_masks
             self.first_flag_index = time_step_mask[0]
-            temp = precursor_proba[flight_id, time_step_mask, :]
+            temp = precursor_proba[flight_id, time_step_mask, :] # precursor_proba.shape = N, T, D
             if show_largest_change:
                 precursor_proba_val_to_plot = np.zeros(temp.shape[-1])
                 for feature in range(temp.shape[-1]):
@@ -102,15 +101,19 @@ class ModelContainer():
     
             sorted_avg = list(np.argsort(precursor_proba_val_to_plot)[::-1])
     
-            if remove_constant:
-                for i in range(precursor_proba.shape[-1]):
-                    if np.std(precursor_proba[flight_id, time_step_mask, i]) <= 1e-4:
-                        sorted_avg.remove(i)
+            # if remove_constant:
+            #     for i in range(precursor_proba.shape[-1]):
+            #         if np.std(precursor_proba[flight_id, time_step_mask, i]) <= 1e-4:
+            #             sorted_avg.remove(i)
             if plot:
                 plt.figure(figsize=figsize)
-    
-                plt.barh(range(len(sorted_avg)), precursor_proba_val_to_plot[sorted_avg][::-1])
-                plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
+                if LIMIT is None:
+                    plt.barh(range(len(sorted_avg)), precursor_proba_val_to_plot[sorted_avg][::-1])
+                    plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
+                else:
+                    # print(columns[sorted_avg][::-1])
+                    plt.barh(range(LIMIT), precursor_proba_val_to_plot[sorted_avg][::-1][-LIMIT:])
+                    plt.yticks(range(LIMIT), columns[sorted_avg][::-1][-LIMIT:])
                 plt.grid(True)
 
                 if plot_save is not None:
@@ -124,7 +127,7 @@ class ModelContainer():
             self.list_sorted_features = np.nan
             self.list_sorted_features_values = np.nan
         else:
-            split_time_masks = np.split(time_step_masks, where_jump)
+            split_time_masks = np.split(time_step_masks, where_jump) # create itereable for each interval of time np.split([True True False False True True], array([4]) = [array([True, True, False, False], [True, True)]
             self.list_sorted_features = []
             self.list_sorted_features_values = []
             for e, time_step_mask in enumerate(split_time_masks):
@@ -140,10 +143,10 @@ class ModelContainer():
         
                 sorted_avg = list(np.argsort(precursor_proba_val_to_plot)[::-1])
         
-                if remove_constant:
-                    for i in range(precursor_proba.shape[-1]):
-                        if np.std(precursor_proba[flight_id, time_step_mask, i]) <= 1e-4:
-                            sorted_avg.remove(i)
+                # if remove_constant:
+                #     for i in range(precursor_proba.shape[-1]):
+                #         if np.std(precursor_proba[flight_id, time_step_mask, i]) <= 1e-4:
+                #             sorted_avg.remove(i)
                             
                 self.list_sorted_features.append(columns[sorted_avg].values)
                 self.list_sorted_features_values.append(precursor_proba_val_to_plot[sorted_avg])
@@ -151,9 +154,12 @@ class ModelContainer():
                 self.sorted_features = np.nan
                 if plot:
                     plt.figure(figsize=figsize)
-        
-                    plt.barh(range(len(sorted_avg)), precursor_proba_val_to_plot[sorted_avg][::-1])
-                    plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
+                    if LIMIT is None:
+                        plt.barh(range(len(sorted_avg)), precursor_proba_val_to_plot[sorted_avg][::-1])
+                        plt.yticks(range(len(sorted_avg)), columns[sorted_avg][::-1])
+                    else:
+                        plt.barh(range(LIMIT), precursor_proba_val_to_plot[sorted_avg][::-1][-LIMIT:])
+                        plt.yticks(range(LIMIT), columns[sorted_avg][::-1][-LIMIT:])
                     plt.grid(True)
 
                     if plot_save is not None:
@@ -346,9 +352,10 @@ class ModelContainer():
             criterion = tc.nn.BCELoss(weight=weight)
             self.task = "binary"
         else:
-            criterion = tc.nn.CrossEntropyLoss(weight=weight)
-            self.task = "multiclass"
-            self.n_classes = len(np.unique(y_train))
+            raise NotImplementedError
+            # criterion = tc.nn.CrossEntropyLoss(weight=weight)
+            # self.task = "multiclass"
+            # self.n_classes = len(np.unique(y_train))
         
         print("Classification task: {}".format(self.task))
         if self.optimizer == "adam":

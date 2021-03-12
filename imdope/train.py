@@ -103,7 +103,6 @@ else:
     X_val = y_val = None
 X_test, y_test = dc.testX, dc.testY
 
-
 # Define the container model
 if not args.load_model:
     if args.model_type == "imdope_mc":
@@ -142,13 +141,31 @@ if not args.load_model:
 else:
     model = torch.load(f"./Data/{model_name}",
                        map_location= device)
+print("---"*50)
+print("Training Results:")
+if args.model_type == "imdope_binary":
+    yhat = model.predict(X_train[:,:,:-2]).cpu().detach().numpy()
+    yhat = (yhat > model.threshold).astype(int)
+else:
+    yhat = model.predict(X_train[:, :, :-2])[1].cpu().detach().numpy()
+print(classification_report(y_train, yhat))
 
 if args.model_type == "imdope_binary":
     yhat = model.predict(X_test[:,:,:-2]).cpu().detach().numpy()
     yhat = (yhat > model.threshold).astype(int)
 else:
-    raise NotImplemented
-
+    yhat = model.predict(X_test[:, :, :-2])[1].cpu().detach().numpy()
+if args.include_val:
+    if args.model_type == "imdope_binary":
+        yhat_val = model.predict(X_val[:, :, :-2]).cpu().detach().numpy()
+        yhat_val = (yhat_val > model.threshold).astype(int)
+    else:
+        yhat_val = model.predict(X_val[:, :, :-2])[1].cpu().detach().numpy()
+    print("---"*50)
+    print("Validation Results:")
+    print(classification_report(y_val, yhat_val))
+print("---"*50)
+print("Testing Results:")
 print(classification_report(y_test, yhat))
 if not args.load_model:
     model.save(f"./Data/{model_name}")

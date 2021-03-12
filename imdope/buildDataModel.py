@@ -16,6 +16,7 @@ parser.add_argument('--adverse-directory', type=str,
 parser.add_argument('--verbose', type=int, default=0,
                     help='Verbose to display the file names while processing data (set verbose=1)')
 
+#TODO: Change var name
 parser.add_argument('--filename', type=str, default="MyDataContainer",
                     help='Data container name')
 
@@ -37,7 +38,7 @@ parser.add_argument('--test-size', type=float, default=0.3,
 parser.add_argument('--val-size', type=float, default=0.2,
                     help='Validation set size')
 
-parser.add_argument('--anomaly-label', type=int, default=1,
+parser.add_argument('--anomaly-label', type=int, default=1, nargs="+",
                     help='Label for anomaly ')
 
 parser.add_argument('--sampling-strategy', type=str, default=None, choices=["SMOTE",

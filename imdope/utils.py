@@ -6,8 +6,13 @@ import seaborn as sns
 from tqdm import tqdm
 import warnings 
 import torch
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.decomposition import PCA
 import pickle as pkl
+from os.path import join
+import scipy.integrate as integrate
+import time
+
 
 
 def window_padding(data_to_pad, full_length, method="interp"):
@@ -313,7 +318,72 @@ def plot_feature_effects_no_effects(proba_time, flight_id, unormalized_data,
 
  if save_path is not None:
      plt.savefig(save_path, dpi=600)
-         
+
+
+def plot_features_temporal_dist(unormalized_data,
+                                columns, mus: list, sigmas: list, c=3,
+                                features_to_show=None,
+                                save_path=None, **kw):
+    # Initializations
+    assert (type(unormalized_data) == np.ndarray) or (unormalized_data == None)
+    ticks_on = kw.get("ticks_on", True)
+    if features_to_show is not None:
+        assert (len(features_to_show) > 4), "Feature to show must be greater than 4"
+
+    width = 4 * 5.5
+    mu_colors = kw.pop("mu_colors", ["b", "r", "g"])
+    fill_colors = kw.pop("fill_colors", ["b", "r", "g"])
+    for iteration, (mus_temporal, sigma) in enumerate(zip(mus, sigmas)):
+        counter = 0
+        upper, lower = boundCreator(mus_temporal, sigma, c)
+        if features_to_show is None:
+            n_features = mus_temporal.shape[1]
+            if unormalized_data is not None:
+                fl = unormalized_data
+        else:
+            if iteration == 0:
+                n_features = len(features_to_show)
+                temp = []
+                for feat in features_to_show:
+                    temp_idx = np.where(feat == columns)[0][0]
+                    temp.append(temp_idx)
+            mus_temporal = mus_temporal[:, temp]
+            upper = upper[:, temp]
+            lower = lower[:, temp]
+            if iteration == 0:
+                columns = columns[temp]
+            if unormalized_data is not None:
+                fl = unormalized_data[:, temp]
+        if iteration == 0:
+            height = 3.5 * int(n_features / 4 + 1)
+            fig, ax1 = plt.subplots(int(n_features / 4 + 1), 4, figsize=(width, height))
+            fig.tight_layout(pad=6.5)
+            l = mus_temporal.shape[0]
+
+        for i in range(0, int(n_features - 4)):  # +1?
+            for j in range(0, 4):
+                if counter == n_features:
+                    break
+                if unormalized_data is not None:
+                    ax1[i, j].plot(fl[:, counter], "--k")
+                ax1[i, j].plot(mus_temporal[:, counter], "--{}".format(mu_colors[iteration]),
+                               label="Anomaly: {}".format(iteration))
+                ax1[i, j].fill_between(range(mus_temporal.shape[0]), lower[:, counter], upper[:, counter],
+                                       color="{}".format(fill_colors[iteration]), alpha=0.25)
+                ax1[i, j].set_ylabel("Feature values")
+                ax1[i, j].set_title(f"Feature: {columns[counter]}")
+                ax1[i, j].set_xlabel("Distance to Event (nm)")
+                ax1[i, j].grid(True)
+                ax1[i, j].legend()
+
+                if ticks_on:
+                    x = np.arange(20, -0.25, -0.25)
+                    ax1[i, j].set_xticks(range(0, l, 10))
+                    ax1[i, j].set_xticklabels(x[::10])
+                counter += 1
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=600)
 
 def boundCreator(mus, sigmas, c=3):
     """
@@ -390,8 +460,8 @@ def history_accurracy_plotter(hist, acc, v_hist=None, v_acc=None, save_path=None
 
 #TODO: Can this function be faster?
 def dataResampling(list_df, distance_away=20, n_miles_increment=0.25, adjust_DF=True,
-                  limiting_feature= "ALTITUDE",
-                  limiting_value = 1000):
+                   limiting_feature="ALTITUDE", handle_categorical=False,
+                   limiting_value=1000):
     """
     Used to resample flight data such that all flights used have the same length. Can also specify the cutoff for the data
     (i.e. forecasting vs classification problem)
@@ -420,21 +490,23 @@ def dataResampling(list_df, distance_away=20, n_miles_increment=0.25, adjust_DF=
         index of flights in original list for which the function did not work.
 
     """
-    assert type(list_df) == list 
+    assert type(list_df) == list
     not_working_flights = []
     for i, df in enumerate(tqdm(list_df)):
         if limiting_feature is not None:
             df = df[df[limiting_feature] > limiting_value]
         try:
             distance = np.arange(df.DISTANCE_TO_LANDING.iloc[0],
-                                 df.DISTANCE_TO_LANDING.iloc[-1], 
+                                 df.DISTANCE_TO_LANDING.iloc[-1],
                                  n_miles_increment)  # Quarter mi increments
             n_pts = len(distance)
             idx = df.index
             temp = pd.DataFrame()
             cols = df.columns
-            float_cols = df.select_dtypes(include=["float32",
-                                                   "float64"]).columns # Assumes numerical data is of type
+            cat_cols = []
+            float_cols = df.select_dtypes(include=["float16",
+                                                   "float32",
+                                                   "float64"]).columns  # Assumes numerical data is of type
 
             # Placing the resampled distance inside the dataframe
             for col in cols:
@@ -450,20 +522,39 @@ def dataResampling(list_df, distance_away=20, n_miles_increment=0.25, adjust_DF=
                         resampled_data = np.interp(x=x, xp=xp, fp=fp)
                         temp[col] = resampled_data
                     else:
-                        temp[col] = df[col].iloc[0]
-                        warnings.warn("This function does not work on categorical variables")
-            
+                        if not handle_categorical:
+                            temp[col] = df[col].iloc[0]
+                            if i == 0:
+                                warnings.warn("This function does not work on categorical variables")
+                        else:
+                            cat_cols.append(cols)
+
             # inversing distance to make it the distance left and setting a zero
             temp["DISTANCE_TO_LANDING"] = abs(
                 temp.DISTANCE_TO_LANDING - temp.DISTANCE_TO_LANDING.iloc[-1])  # distance remaining
             # Filtering
             temp = temp[temp.DISTANCE_TO_LANDING <= distance_away]  # last 20 mi
+            # Looks min distance to point of interest and use the value there for the categorical variable
+            if handle_categorical:
+                for col in cat_cols:
+                    tmp_list_cat = []
+                    distance_pts = np.arange(distance_away, 0 - n_miles_increment, -n_miles_increment)
+                    df_dist_pts = pd.DataFrame(data={"myvals": distance_pts})
+                    series_of_diff = df_dist_pts.myvals.apply(lambda x: abs(x - df.DISTANCE_TO_LANDING.values))
+                    array_diff = np.concatenate(series_of_diff.values).reshape(-1, len(distance_pts))
+                    indices = np.argmin(array_diff, axis=0)
+                    # for distance_pt in distance_pts:
+                    #     idx_min_dist = np.argmin(abs(df.DISTANCE_TO_LANDING.values-distance_pt))
+                    #     tmp_list_cat.append(df[col].iloc[idx_min_dist])
+                    temp[col] = df.reset_index(drop=True).loc[indices, col].values  # np.asarray(tmp_list_cat)
 
             list_df[i] = temp
         except KeyboardInterrupt:
             raise
-        except  :
+        except Exception as err:
             # Handling flights that had an issue
+            print(err)
+            print(f"Issue at index: {i}")
             list_df[i] = np.nan
             not_working_flights.append(i)
     if adjust_DF:
@@ -891,7 +982,7 @@ def get_original_flight_from_flight_id(X, y, dataframe, index=None):
     return pd.concat(lst_flights)
 
 def feature_plotter(df, mus, sigmas, features, anomaly=1, **kw):
-    temp_nom = df[(df.Anomaly == 0)]
+    # temp_nom = df[(df.Anomaly == 0)]
     counter = 0
     
     f_idx = [i for i,feat in enumerate(df.columns) if feat in features ]
@@ -948,3 +1039,308 @@ def change_df_index(df, path_save=None,index=None, anomaly=0):
     if path_save is not None:
         df_reduced.to_csv(path_save)
     return df_reduced
+
+def sample_gaussian(m, v, device):
+    sample = torch.randn(m.shape, device=device)#.cuda()
+    z = m + (v**0.5)*sample
+    return z
+
+def gaussian_parameters(h, dim=-1):
+    m, h = torch.split(h, h.size(dim) // 2, dim=dim)
+    v = torch.nn.functional.softplus(h) + 1e-8
+    return m, v
+
+def kl_normal(qm, qv, pm, pv, yh):
+    element_wise = 0.5 * (torch.log(pv) - torch.log(qv) + qv / pv + (qm - pm - yh).pow(2) / pv - 1)
+    kl = element_wise.sum(-1)
+    #print("log var1", qv)
+    return kl
+
+def feature_map_size(W_in, kernel, stride=1, padding=0 ):
+    return int(np.floor((W_in+2*padding-(kernel-1)-1)/stride +1))
+
+def anomaly_detection_train_loop(model, X_train, y_train, batch_size_percent=0.10,
+                                 optimizer="adam", learning_rate=1e-3, l2 =0, lamda = 100, alpha=1, momentum=0.999,
+                                 X_val=None, y_val=None, n_epochs=100, use_stratified_batch_size=True, beta=None,
+                                 print_every_iteration=20):
+    if optimizer == "adam":
+        optimizer = torch.optim.Adam(model.parameters(),
+                                  lr=learning_rate, weight_decay=l2)
+    elif optimizer == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(),
+                                 lr=learning_rate, weight_decay=l2, momentum=momentum)
+
+    device = model.device
+    model.train()
+    if beta is None:
+        beta = DeterministicWarmup(n=n_epochs, t_max=1)
+
+    if not torch.is_tensor(X_train):
+        X_train = torch.Tensor(X_train)
+    if not torch.is_tensor(y_train):
+        y_train = torch.Tensor(y_train)
+
+    if X_val is not None:
+        if not torch.is_tensor(X_val):
+            X_val = torch.Tensor(X_val)
+        if not torch.is_tensor(y_val):
+            y_val = torch.Tensor(y_val)
+        data_val = myDataset(X_val, y_val)
+    if batch_size_percent > 1:
+        batch_size = batch_size_percent
+    else:
+        batch_size = int(batch_size_percent*X_train.shape[0])
+    data_train = myDataset(X_train, y_train)
+    if use_stratified_batch_size is False:
+        print("Mini-batch strategy: Random sampling")
+        dataloader_train = DataLoader(data_train, batch_size=batch_size, shuffle=True)
+    else:
+        print("Mini-batch strategy: Stratified")
+        # get class counts
+        weights = []
+        for label in torch.unique(y_train):
+            count = len(torch.where(y_train == label)[0])
+            weights.append(1 / count)
+        weights = torch.tensor(weights).to(device)
+        samples_weights = weights[y_train.type(torch.LongTensor).to(device)].flatten()
+        sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
+        dataloader_train = DataLoader(data_train, batch_size=batch_size, sampler=sampler)
+
+    if X_val is not None:
+        dataloader_val = torch.utils.data.DataLoader(data_val, batch_size=batch_size, shuffle=False)
+    if print_every_iteration is None:
+        print_every_iteration= int(.20*len(X_train))
+    try:
+        train_loss_epoch_saved = []
+        bce_epoch_saved = []
+        rec_epoch_saved = []
+        for epoch in tqdm(range(n_epochs)):
+            train_loss_epoch = 0
+            bce_epoch = 0
+            rec_epoch = 0
+
+            if X_val is not None:
+                val_loss_epoch = 0
+                val_bce_epoch = 0
+                val_rec_epoch = 0
+                val_loss_epoch_saved = []
+                val_bce_epoch_saved = []
+                val_rec_epoch_saved = []
+            for iteration, (batch_x, batch_y) in enumerate(dataloader_train):
+                batch_x, batch_y = batch_x.to(device).permute(0, 2, 1), batch_y.to(device)
+                loss, _, _, _, rec, kl, ce_lamda, bce = model.loss_function(batch_x, batch_y,
+                                                                            beta=next(beta) if type(beta)==DeterministicWarmup else beta,
+                                                                            lamda=lamda,
+                                                                            alpha=alpha)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                train_loss_epoch += loss.item()
+                bce_epoch += bce.item()
+                rec_epoch += rec.item()
+
+                if iteration % print_every_iteration == 0:
+                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}'.format(
+                        epoch, iteration * len(batch_x), len(dataloader_train.dataset),
+                               100. * iteration *len(batch_x) / len(dataloader_train.dataset), loss.item() / len(batch_x), rec.item()/len(batch_x), bce.item()/len(batch_x)))
+                if X_val is not None:
+                    with torch.no_grad():
+                        for val_batch_x, val_batch_y in dataloader_val:
+                            val_batch_x, val_batch_y = val_batch_x.to(device).permute(0, 2, 1), val_batch_y.to(device)
+                            loss_val, _, _, _, rec_val, _, _, bce_val = model.loss_function(val_batch_x, val_batch_y, beta=beta, lamda=lamda)
+                            val_loss_epoch += loss_val.item()
+                            val_bce_epoch += bce_val
+                            val_rec_epoch += rec_val
+                            if iteration % 100 == 0:
+                                print('Validation Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.4f}\tRec Error: {:.4f}\tBCE: {:.4f}'.format(
+                                    epoch, iteration * len(val_batch_x), len(dataloader_val.dataset),
+                                           100. * iteration / len(dataloader_val), loss_val.item() / len(val_batch_x),
+                                            rec_val, bce_val))
+
+            train_loss_epoch_saved.append(train_loss_epoch / len(dataloader_train.dataset))
+            bce_epoch_saved.append(bce_epoch / len(dataloader_train.dataset))
+            rec_epoch_saved.append(rec_epoch / len(dataloader_train.dataset))
+
+            print('\n====> Train Epoch: {} Average loss: {:.6f} Average_Rec: {:.6f} Average_BCE: {:.6f}'.format(epoch,
+                                                                                            train_loss_epoch_saved[epoch],
+                                                                                            rec_epoch_saved[epoch],
+                                                                                            bce_epoch_saved[epoch]))
+            if X_val is not None:
+                val_loss_epoch_saved.append(val_loss_epoch / len(dataloader_val.dataset))
+                val_bce_epoch_saved.append(val_bce_epoch / len(dataloader_val.dataset))
+                val_rec_epoch_saved.append(val_rec_epoch / len(dataloader_val.dataset))
+                print('\n====> Validation Epoch: {} Average loss: {:.6f} Average_Rec: {:.6f} Average_BCE: {:.6f}'.format(epoch,
+                                                                                                            val_loss_epoch_saved[
+                                                                                                                epoch],
+                                                                                                            val_rec_epoch_saved[
+                                                                                                                epoch],
+                                                                                                            val_bce_epoch_saved[
+                                                                                                                epoch]
+                                                                                                                     ))
+
+    except KeyboardInterrupt:
+        print("Returning model up to epoch {}".format(epoch))
+    except:
+        raise
+
+    if X_val is None:
+        return model.eval(), train_loss_epoch_saved, bce_epoch_saved, rec_epoch_saved
+    else:
+        return model.eval(), train_loss_epoch_saved, bce_epoch_saved, rec_epoch_saved, \
+                val_loss_epoch_saved, val_bce_epoch_saved, val_rec_epoch_saved
+
+
+def batch_prediction(model, x, batch_size=32, **kw):
+    y_de = torch.zeros((len(x), 1))
+    prediction_dataset = myDataset(x, y_de)
+    prediction_dataloader = DataLoader(prediction_dataset, batch_size=batch_size, shuffle=False)
+    del prediction_dataset
+    mu_latent, var_latent, predict, x_re = [], [], [], []
+    for batch_x, _ in prediction_dataloader:
+        (_, _, _), (_, _, _), (_, _, _), \
+        (_, _, _), (_, mu_latent_batch, var_latent_batch), _, \
+        (_, _, _), (_, _, _), \
+        (_, _, _), _, (_, _, _), \
+        (_, _, _, _, _, _, _, _), _, _, _, predict_batch = model.lnet(batch_x.to(model.device))
+        mu_latent.append(mu_latent_batch)
+        var_latent.append(var_latent_batch)
+        predict.append(predict_batch)
+        # x_re.append(x_re_batch)
+    return mu_latent, var_latent, predict#, x_re
+
+def batch_prediction_rec(model, x, batch_size=32, **kw):
+    y_de = torch.zeros((len(x), 1))
+    prediction_dataset = myDataset(x, y_de)
+    prediction_dataloader = DataLoader(prediction_dataset, batch_size=batch_size, shuffle=False)
+    del prediction_dataset
+    x_re = []
+    for batch_x, _ in prediction_dataloader:
+        (_, _, _), (_, _, _), (_, _, _), \
+        (_, _, _), (_, _, _), _, \
+        (_, _, _), (_, _, _), \
+        (_, _, _), _, (_, _, _), \
+        (_, _, _, _, _, _, _, _), _, x_re_batch, _, predict_batch = model.lnet(batch_x.to(model.device))
+        x_re.append(x_re_batch)
+    return x_re
+
+class DeterministicWarmup(object):
+    def __init__(self, n=100, t_max=1):
+        self.t = 0
+        self.t_max = t_max
+        self.inc = 1 / n
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        t = self.t + self.inc
+
+        self.t = self.t_max if t > self.t_max else t  # 0->1
+        return self.t
+
+
+
+def create_DF_list(meta_df_events:pd.DataFrame, path_to_tails:str, anomaly_tag:int, LIMIT=None, file_repeat_save=None):
+    start = time.time()
+    DF_list = []
+    missing_data_flight_id = []
+    no_file = []
+    if (file_repeat_save is not None) and (os.path.exists(file_repeat_save)):
+        with open(file_repeat_save, "rb") as f:
+            DF_list = pkl.load(f)
+        start_index = len(DF_list)-1
+    else:
+        start_index = 0
+
+
+    for j, flight in enumerate(tqdm(meta_df_events.index[start_index:]), start_index):
+        # get tail
+        tail = flight[:3]
+        path_to_flight = join(path_to_tails, f"Tail_{tail}" ,  f"Tail_{tail}", flight)
+        try:
+            with open(path_to_flight, "rb") as f:
+                temp = pkl.load(f)
+        except:
+            if not os.path.exists(path_to_flight):
+                no_file.append(path_to_flight)
+                path_to_flight = join(path_to_tails, f"Tail_{tail}", flight)
+                try:
+                    with open(path_to_flight, "rb") as f:
+                        temp = pkl.load(f)
+                except:
+                    raise Exception(f"problem with loading the file, flight: {flight}")
+            else:
+                raise Exception(f"problem with loading the file, flight: {flight}")
+            continue
+        temp = temp["data"]
+        if any(temp.columns.duplicated()) and j == 0:
+            print(f"Duplicate columns: {temp.loc[:, temp.columns.duplicated()].columns}")
+        temp = temp.loc[:, ~temp.columns.duplicated()]  # removing duplicate columns
+        # Before touch down
+        temp = temp[temp["WEIGHT ON WHEELS"] == 1]
+        # Correcting altitude using destination airport height
+        temp["ALTITUDE"] = temp["PRESSURE ALTITUDE LSP"] - temp.loc[-500:, "PRESSURE ALTITUDE LSP"].min()
+        # Calculating remaining distance to touch-down
+        distance = integrate.cumtrapz(temp["GROUND SPEED LSP"] / 3600 * 1.15)  # Converting to mph and then mi/s + integral
+        temp = temp.iloc[1:, :]  # Removing first row
+        temp["DISTANCE_TO_LANDING"] = distance
+        # temp["sKE"] = 0.5 * temp["TRUE AIRSPEED LSP"] ** 2  # specific kinetic energy (no mass)
+        # temp["sPE"] = 32.17 * temp["ALTITUDE"]  # specific PE
+        temp["flight_id"] = j
+        temp["filename"] = flight
+
+        temp["Anomaly"] = anomaly_tag
+
+        if temp.isnull().sum().sum() > 0:
+            print("Missing Data")
+            missing_data_flight_id.append(j)
+        DF_list.append(temp)
+        if j % 500 == 0:
+            with open(file_repeat_save, "wb") as f:
+                pkl.dump(DF_list, f)
+        if LIMIT is not None:
+            if len(DF_list) == LIMIT:
+                break
+
+    print(f"\nTime taken: {time.time() - start}")
+    print(f"Number of flights: {len(DF_list)}")
+    return DF_list, missing_data_flight_id, no_file
+
+def data_containers_inter_scale(dc1, dc2, data_set="validation", indx_filename=-3, **kw):
+    # col_indices = []
+    # for col in dc1.header:
+    #     col_idx = np.where(col==dc2.header)[0]
+    #     col_indices.append(col_idx)
+    dc2.df = dc2.df[dc1.df.columns]
+    dc2.header = dc1.header
+    dc2.MIL_processing(**kw)
+    dc2.scaler = dc1.scaler
+    if data_set=="train":
+        X_prime = dc2.trainX
+        y_prime = dc2.trainY
+    elif data_set=="validation":
+        X_prime = dc2.valX
+        y_prime = dc2.valY
+    elif data_set=="test":
+        X_prime = dc2.testX
+        y_prime = dc2.testY
+
+    if indx_filename is not None:
+        X_prime = np.delete(X_prime, indx_filename, axis=2)
+
+    X = dc2.normalizeData(use_loaded_df=False, data_set=data_set,
+                                data=X_prime,
+                               )
+    return X.reshape(len(y_prime), -1, dc1.trainX.shape[-1]), y_prime
+
+def interp_bad_data(data, columns, limit, greaterThan=False, **kw):
+    for col in columns:
+      if  not greaterThan:
+        mask  = (data[col] < limit )
+      else:
+        mask  = (data[col] > limit )
+      data[col][mask] = np.nan
+      data[col] = data[col].interpolate(**kw, axis=0)
+    return data
