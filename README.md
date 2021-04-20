@@ -3,7 +3,7 @@ This package is currently work in progress. The project is projected to be compl
 
 # Precursor Analysis Overview
 Identification and analysis of precursors of time-series using the Intelligent Methodology for the Discovery of Precursor of adverse Events (IM-DoPE). 
-![IM-DoPE](img/meethodology_2.jpg)
+![IM-DoPE](img/meethodology_2.png)
 
 
 # Data processing
