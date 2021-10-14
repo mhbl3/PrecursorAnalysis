@@ -30,15 +30,6 @@ parser.add_argument('--mini-batch-percent', type=float, nargs = "+",
                     
 parser.add_argument('--data-container', type=str,
                     help='data container path (after MIL)')
-                    
-parser.add_argument('--test-ratio', type=float, default=0.3,
-                    help='Test size ratio')
-                    
-parser.add_argument('--val-ratio', type=float, default=0.33,
-                    help='Val size ratio')
-                    
-parser.add_argument('--anomaly', type=int, default=1,
-                    help='Anomaly index')
 
 parser.add_argument('--epochs', type=int, default=30,
                     help='Number of epochs')
@@ -141,6 +132,8 @@ if __name__ == "__main__":
     dropout = [args.dropout]
     model_type = [args.model_type]
     n_classes = [args.n_classes]
+    if model_type[0]=="imdope_binary":
+        n_classes = [1]
     optimizer = [args.optimizer]
 
 

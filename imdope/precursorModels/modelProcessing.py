@@ -344,6 +344,8 @@ class ModelContainer():
 
         self.n_epochs = num_epochs
         print_every_epochs = kw.pop("print_every_epochs", 10)
+        n_important_features = kw.pop("n_important_features", None)
+        alpha = kw.pop("alpha", 1)
         # Binary cross entropy loss, learning rate and l2 regularization
         weight = kw.pop("class_weight", None)
         if weight is not None:
@@ -426,8 +428,12 @@ class ModelContainer():
                             print(f"Proportion Class {c}: {batch_y[batch_y==c].shape[0]/len(batch_y)}")
                             
                     outputs = clf(batch_x)
-                    # obtain the loss 
-                    loss = criterion(outputs.flatten(), batch_y.view(-1).flatten())
+                    # obtain the loss
+                    if n_important_features is None:
+                        loss = criterion(outputs.flatten(), batch_y.view(-1).flatten())
+                    else:
+                        loss = criterion(outputs.flatten(), batch_y.view(-1).flatten()) + \
+                               alpha * self.precursor_proba_loss(clf.precursor_proba, n_important_features, batch_y)
                     hist[epoch] = loss.item()
                     
                     if self.task == "binary":
@@ -456,7 +462,13 @@ class ModelContainer():
                             for batch_X_val, batch_y_val in dataloader_val:
                                 batch_X_val, batch_y_val = batch_X_val.to(self.device), batch_y_val.to(self.device)
                                 self.valYhat = clf(batch_X_val)
-                                val_loss = criterion(self.valYhat, batch_y_val.flatten())
+
+                                if n_important_features is None:
+                                    val_loss = criterion(self.valYhat, batch_y_val.flatten())
+                                else:
+                                    val_loss = criterion(self.valYhat, batch_y_val.flatten()) + \
+                                           alpha * self.precursor_proba_loss(clf.precursor_proba, n_important_features, batch_y_val)
+
                                 mini_loss.append(val_loss.item())
 
                                 if self.task == "binary":
@@ -550,6 +562,17 @@ class ModelContainer():
                 
             
         return clf, hist, val_hist
+
+    def precursor_proba_loss(self, precursor_proba, n_important_features, y_train):
+        N, T, D = precursor_proba.shape
+        criterion = tc.nn.BCEWithLogitsLoss()
+        maxpool_precursor_proba = tc.max(precursor_proba, dim=1)[0] # across time
+        sum_maxpool_precursor_proba = tc.sum(maxpool_precursor_proba, dim=1) # sum across features
+        tmp_y_train = tc.zeros((N, D), device=self.device)
+        tmp_y_train[y_train.flatten() > 0, :] = 1
+        loss_feature_precrusor = criterion(maxpool_precursor_proba, tmp_y_train)
+        loss_feature_precrusor_reduce = tc.mean((sum_maxpool_precursor_proba - n_important_features)**2)
+        return  loss_feature_precrusor + loss_feature_precrusor_reduce
 
     def train_Precursor_mc(self, clf, X_train, y_train,
                            X_val=None, y_val=None, l2=0,
@@ -847,7 +870,8 @@ class ModelContainer():
 ### Binary Models
 
 class MILLR(tc.nn.Module):
-    def __init__(self, input_dim, flight_length, device, aggregation="maxpool"):
+    def __init__(self, input_dim, flight_length, device, aggregation="maxpool",
+                 output_resize=False):
         super(MILLR, self).__init__()
         self.fc = nn.Linear(input_dim, 1)
         self.sigmoid = nn.Sigmoid()
@@ -857,6 +881,7 @@ class MILLR(tc.nn.Module):
         self.task = "binary"
         self.threshold = 0.5
         self.agg = aggregation
+        self.output_resize= output_resize
 
     def forward(self, x, train=True):
         N, _, _ = x.size()
@@ -866,6 +891,7 @@ class MILLR(tc.nn.Module):
             p = tc.mean(self.pi, axis=-1)  # Nx1
         elif self.agg == "maxpool":
             p = tc.max(self.pi, dim=-1)[0]
+        p = p.view(-1, 1)
         return p
 
     def get_feature_importance(self, columns, n_top=5):
@@ -1070,7 +1096,7 @@ class adopt_like(nn.Module, ModelContainer):
                                               out_features= 1), 
                                     nn.Sigmoid())
          
-  def forward(self, x):
+  def forward(self, x, train=True):
       if not tc.is_tensor(x):
               x = tc.Tensor(x).to(self.device)
       else:
@@ -1171,7 +1197,7 @@ class precursor_model(nn.Module, ModelContainer):
                       out_features=n_classes),
             nn.Sigmoid())
 
-    def forward(self, x):
+    def forward(self, x, train=True):
         if not tc.is_tensor(x):
             x = tc.Tensor(x).to(self.device)
         else:
@@ -1213,7 +1239,7 @@ class precursor_model(nn.Module, ModelContainer):
         self.use_stratified_batch_size = kwargs.pop("use_stratified_batch_size", False)
         self.trainedModel, self.hist, self.val_hist = self.train_Precursor_binary(**kwargs)
 
-    def predict(self, x):
+    def predict(self, x, train=True):
         with tc.no_grad():
             out = self.trainedModel(x)
         return out
@@ -1346,7 +1372,7 @@ class precursor_model_BN(nn.Module, ModelContainer):
         self.use_stratified_batch_size = use_stratified_batch_size
         self.trainedModel, self.hist, self.val_hist = self.train_Precursor_binary(**kwargs)
 
-    def predict(self, x, train=False):
+    def predict(self, x, train=True):
         with tc.no_grad():
             if self.task == "binary":
                 if (self.device != "cpu") and (not next(self.parameters()).is_cuda):
@@ -1360,9 +1386,9 @@ class precursor_model_BN(nn.Module, ModelContainer):
                     except:
                         pass
                      
-                out = self.trainedModel(x, train)
+                out = self.trainedModel(x)
             else:
-                out = F.softmax(self.trainedModel(x, train), dim=1)
+                out = F.softmax(self.trainedModel(x), dim=1)
         return out
 
     def compute_window_size(self):
@@ -1444,7 +1470,7 @@ class precursor_model_BN_v2(nn.Module, ModelContainer):
                           out_features=self.n_classes)
             )
 
-    def forward(self, x):
+    def forward(self, x, train=True):
         if not tc.is_tensor(x):
             x = tc.Tensor(x).to(self.device)
         else:
@@ -1494,7 +1520,7 @@ class precursor_model_BN_v2(nn.Module, ModelContainer):
         self.use_stratified_batch_size = use_stratified_batch_size
         self.trainedModel, self.hist, self.val_hist = self.train_Precursor_binary(**kwargs)
 
-    def predict(self, x):
+    def predict(self, x, train=True):
         with tc.no_grad():
             if self.task == "binary":
                 if (self.device != "cpu") and (not next(self.parameters()).is_cuda):

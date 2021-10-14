@@ -184,6 +184,38 @@ class DataContainer():
         if not hasattr(self, "header"):
             self.header = self.df.columns
 
+    def drop(self, columns):
+        """
+        Drops columns from data frame, header , and training/validation/test sets
+        """
+        idx_to_drop = [i for i,j in enumerate(self.df.columns) if j in columns]
+        self.df = self.df.drop(columns=columns)
+        self.header = self.header.drop(columns)
+        self.trainX = np.delete(self.trainX, idx_to_drop, axis=2)
+        if self.using_val_data:
+            self.valX = np.delete(self.valX, idx_to_drop, axis=2)
+        self.testX = np.delete(self.testX, idx_to_drop, axis=2)
+
+    def returnSets(self, anomaly):
+        """
+        Return sets corresponding to anomaly when mutltiple classes were used for the MIL
+        """
+        idx_hs_train = np.where((self.trainY == anomaly) | (self.trainY == 0))[0]
+        idx_hs_test = np.where((self.testY == anomaly) | (self.testY == 0))[0]
+        X_train, y_train = self.trainX[idx_hs_train, :, :], self.trainY[idx_hs_train]
+        idx_train_event = np.where(y_train == anomaly)[0]
+        y_train[idx_train_event] = 1
+        X_test, y_test = self.testX[idx_hs_test, :, :], self.testY[idx_hs_test]
+        idx_test_event = np.where(y_test == anomaly)[0]
+        y_test[idx_test_event] = 1
+        if self.using_val_data:
+            idx_hs_val = np.where((self.valY == anomaly) | (self.valY == 0))[0]
+            X_val, y_val = self.valX[idx_hs_val, :, :], self.valY[idx_hs_val]
+            idx_val_event = np.where(y_val == anomaly)[0]
+            y_val[idx_val_event] = 1
+            return (X_train, y_train), (X_val, y_val), (X_test, y_test)
+        return (X_train, y_train), (X_test, y_test)
+
     def create_nominal_adverse_directories(self, path_to_data_directory, anomaly=1, 
                                            create_nominal_files=True, create_adverse_files=True,
                                            **kw):

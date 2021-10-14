@@ -12,6 +12,7 @@ import pickle as pkl
 from os.path import join
 import scipy.integrate as integrate
 import time
+from sklearn.cluster import KMeans
 
 
 
@@ -328,7 +329,7 @@ def plot_features_temporal_dist(unormalized_data,
     assert (type(unormalized_data) == np.ndarray) or (unormalized_data == None)
     ticks_on = kw.get("ticks_on", True)
     if features_to_show is not None:
-        assert (len(features_to_show) > 4), "Feature to show must be greater than 4"
+        assert (len(features_to_show) >= 4), "Feature to show must be greater than or equal to 4"
 
     width = 4 * 5.5
     mu_colors = kw.pop("mu_colors", ["b", "r", "g"])
@@ -366,8 +367,12 @@ def plot_features_temporal_dist(unormalized_data,
                     break
                 if unormalized_data is not None:
                     ax1[i, j].plot(fl[:, counter], "--k")
+                if iteration==0:
+                    label= "Nominal"
+                else:
+                    label = "Anomaly: {}".format(iteration)
                 ax1[i, j].plot(mus_temporal[:, counter], "--{}".format(mu_colors[iteration]),
-                               label="Anomaly: {}".format(iteration))
+                               label=label)
                 ax1[i, j].fill_between(range(mus_temporal.shape[0]), lower[:, counter], upper[:, counter],
                                        color="{}".format(fill_colors[iteration]), alpha=0.25)
                 ax1[i, j].set_ylabel("Feature values")
@@ -457,6 +462,16 @@ def history_accurracy_plotter(hist, acc, v_hist=None, v_acc=None, save_path=None
 
   if save_path is not None:
     plt.savefig(save_path+"//loss_acc.pdf")
+
+def index_Range_changer(df, new_index=None):
+    list_ = []
+    if new_index is None:
+        new_index = np.arange(20, -.25, -.25)
+    for id in df.flight_id.unique():
+        tmp = df[df.flight_id==id]
+        tmp.index = new_index
+        list_.append(tmp)
+    return  pd.concat(list_)
 
 #TODO: Can this function be faster?
 def dataResampling(list_df, distance_away=20, n_miles_increment=0.25, adjust_DF=True,
@@ -565,7 +580,7 @@ def dataResampling(list_df, distance_away=20, n_miles_increment=0.25, adjust_DF=
     return list_df, not_working_flights
 
 
-def dist_plotter(df, dtype="numerical", anomaly=1, show_hist_numerical=False):
+def dist_plotter(df, dtype="numerical", anomaly=1, show_hist_numerical=False, cols_interest=None):
     """
     Plots the distribution for each feature showing the nomimal vs adverse flights
 
@@ -585,6 +600,12 @@ def dist_plotter(df, dtype="numerical", anomaly=1, show_hist_numerical=False):
     None.
 
     """
+
+    if cols_interest is not None:
+        Anomalies = df.Anomaly
+        assert len(cols_interest) >= 4, "Must have at least 4 features"
+        df = df[cols_interest]
+        df["Anomaly"] = Anomalies
     temp_nom = df[(df.Anomaly == 0)]
     counter = 0
 
@@ -636,6 +657,53 @@ def dist_plotter(df, dtype="numerical", anomaly=1, show_hist_numerical=False):
                 axis[i, j].grid(True)
                 axis[i, j].legend()
                 counter += 1
+
+def dist_plotter_boxplot(DF, features_to_show, fontsize=25, interval=4, max_len=81, index_range=None, pad=6.5):
+    """
+    Plots the distribution for each feature showing the nomimal vs adverse flights
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame will all data including nominal and adverse flights.
+    dtype : str, optional
+        numerical or category can be used. The default is "numerical".
+    anomaly : int, optional
+        The anomaly index to be plotted. The default is 1.
+    show_hist_numerical : bool, optional
+        Show histogram instead of density plot. The default is False.
+
+    Returns
+    -------
+    None.
+
+    """
+
+    assert len(features_to_show) >= 2, "Must have at least 2 features"
+    n_features = len(features_to_show)
+    counter = 0
+    if index_range == None:
+        index_range = np.arange(20, -0.25,-0.25)
+    width = 4 * 5.5
+    height = 3.5 * int(n_features / 2 + 1)
+    fig, axis = plt.subplots(int(n_features / 2 + 1), 2, figsize=(width, height))
+    fig.tight_layout(pad=pad)
+    for i in range(0, int(n_features / 2) + 1):
+        for j in range(0, 2):
+            if counter == n_features:
+                break
+            feature = features_to_show[counter]
+            sns.boxplot(x=DF.index[::-1], y=feature,
+                data=DF, ax=axis[i, j], showfliers=False, hue="Anomaly")
+
+            axis[i, j].set_xlabel("Distance to Event (nm)", fontsize=fontsize)
+            axis[i, j].tick_params(labelsize=fontsize)
+
+            axis[i, j].set_xticks(range(0, max_len, interval))
+            axis[i, j].set_xticklabels(index_range[::interval], rotation=45)
+            axis[i, j].set_ylabel(feature, fontsize=fontsize)
+            # plt.show()
+            counter += 1
 
 def layer_heatmap(model, layer, flight_data, feature, feature_list=None,
                 figsize=None, annot=False, compute_ranking_across_flights= False,
@@ -903,9 +971,9 @@ def compute_ranking_across_flights(model, feature_list, cumulative_score=True, r
 
     return [x for x in zip(feat, np.round(sorted_val, rounding))], score_tracker, sorted_feat, list_flight_multiple_scores, list_flight_unique_scores, list_first_index
 
-    
+
 def pca_plot(X, y, data_time_series=True,
-             label='Classes', **kw):    
+             label='Classes', **kw):
     """
     Plot pca approximation of the data
 
@@ -927,34 +995,50 @@ def pca_plot(X, y, data_time_series=True,
     x_pca : TYPE
         DESCRIPTION.
 
-    """             
-    pca = PCA(n_components=2)
+    """
+    pca = PCA(n_components=2, random_state=99)
+    pca_sub = kw.pop("pca", None)
     return_reduced_data = kw.pop("return_reduced_data", False)
     if data_time_series:
-        x_pca =  pca.fit_transform(X[:, :, :-2].reshape(-1, X.shape[2]-2))
+        if pca_sub is None:
+            x_pca = pca.fit_transform(X[:, :, :-2].reshape(-1, X.shape[2] - 2))
+        else:
+            x_pca = pca_sub.transform(X[:, :, :-2].reshape(-1, X.shape[2] - 2))
+            pca = pca_sub
     else:
-        x_pca =  pca.fit_transform(X)
+        if pca_sub is None:
+            x_pca = pca.fit_transform(X)
+        else:
+            x_pca = pca_sub.transform(X)
+            pca = pca_sub
     if kw.pop("verbose", 0) > 0:
         print("Variance of each component: {}".format(pca.explained_variance_ratio_))
-        print("Total Variance Explained: {}".format(round(sum(list(pca.explained_variance_ratio_))*100,2)))
+        print("Total Variance Explained: {}".format(round(sum(list(pca.explained_variance_ratio_)) * 100, 2)))
     plot_2d_space(x_pca, y.flatten(), **kw, label=label)
-    
+
     if return_reduced_data:
-        return x_pca
+        return x_pca, pca
     
 def plot_2d_space(X, y, label='Classes', **kw):   
 #     colors = ['#1F77B4', '#FF7F0E']
 #     markers = ['o', 's']
+    label_plot = kw.pop("legend", None)
     for i in np.unique(y):
         temp_x = X[np.where(y==i)[0], :]
-        plt.scatter(
-            temp_x[:,0], temp_x[:,1],
-             **kw,
-             label=str(i) )
+        if label_plot is None:
+            plt.scatter(
+                temp_x[:,0], temp_x[:,1],
+                **kw,
+                label=str(i) )
+        else:
+            plt.scatter(
+                temp_x[:,0], temp_x[:,1],
+                **kw,
+                label= label_plot[i] )
     plt.title(label)
     plt.legend(loc='upper right')
     plt.show()
-    
+
 def get_flight_filename_from_flight_id(X, y, dataframe, path_to_meta=None):
     mini_xs = X[:,0, -1]
     lst_filename = []
@@ -1142,22 +1226,24 @@ def anomaly_detection_train_loop(model, X_train, y_train, batch_size_percent=0.1
                 rec_epoch += rec.item()
 
                 if iteration % print_every_iteration == 0:
-                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}'.format(
+                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}\tKL: {:.6f}'.format(
                         epoch, iteration * len(batch_x), len(dataloader_train.dataset),
-                               100. * iteration *len(batch_x) / len(dataloader_train.dataset), loss.item() / len(batch_x), rec.item()/len(batch_x), bce.item()/len(batch_x)))
+                               100. * iteration *len(batch_x) / len(dataloader_train.dataset),
+                        loss.item() / len(batch_x), rec.item()/len(batch_x), bce.item()/len(batch_x), kl.item()/len(batch_x)))
                 if X_val is not None:
                     with torch.no_grad():
                         for val_batch_x, val_batch_y in dataloader_val:
                             val_batch_x, val_batch_y = val_batch_x.to(device).permute(0, 2, 1), val_batch_y.to(device)
-                            loss_val, _, _, _, rec_val, _, _, bce_val = model.loss_function(val_batch_x, val_batch_y, beta=beta, lamda=lamda)
+                            loss_val, _, _, _, rec_val, kl_val, _, bce_val = model.loss_function(val_batch_x, val_batch_y, beta=beta, lamda=lamda)
                             val_loss_epoch += loss_val.item()
                             val_bce_epoch += bce_val
                             val_rec_epoch += rec_val
                             if iteration % 100 == 0:
-                                print('Validation Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.4f}\tRec Error: {:.4f}\tBCE: {:.4f}'.format(
+                                print('Validation Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}\tKL: {:.6f}'.format(
                                     epoch, iteration * len(val_batch_x), len(dataloader_val.dataset),
                                            100. * iteration / len(dataloader_val), loss_val.item() / len(val_batch_x),
-                                            rec_val, bce_val))
+                                            rec_val.item()/len(val_batch_x), bce_val.item()/len(val_batch_x),
+                                    kl_val.item()/len(val_batch_x)))
 
             train_loss_epoch_saved.append(train_loss_epoch / len(dataloader_train.dataset))
             bce_epoch_saved.append(bce_epoch / len(dataloader_train.dataset))
@@ -1190,6 +1276,273 @@ def anomaly_detection_train_loop(model, X_train, y_train, batch_size_percent=0.1
     else:
         return model.eval(), train_loss_epoch_saved, bce_epoch_saved, rec_epoch_saved, \
                 val_loss_epoch_saved, val_bce_epoch_saved, val_rec_epoch_saved
+
+def anomaly_detection_train_loop_modified_p(model, X_train, y_train, batch_size_percent=0.10,
+                                 optimizer="adam", learning_rate=1e-3, l2 =0, lamda = 100, alpha=1, momentum=0.999,
+                                 X_val=None, y_val=None, n_epochs=100, use_stratified_batch_size=True,
+                                 print_every_iteration=20):
+    if optimizer == "adam":
+        optimizer = torch.optim.Adam(model.parameters(),
+                                  lr=learning_rate, weight_decay=l2)
+    elif optimizer == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(),
+                                 lr=learning_rate, weight_decay=l2, momentum=momentum)
+
+    device = model.device
+    model.train()
+
+    if not torch.is_tensor(X_train):
+        X_train = torch.Tensor(X_train)
+    if not torch.is_tensor(y_train):
+        y_train = torch.Tensor(y_train)
+
+    if X_val is not None:
+        if not torch.is_tensor(X_val):
+            X_val = torch.Tensor(X_val)
+        if not torch.is_tensor(y_val):
+            y_val = torch.Tensor(y_val)
+        data_val = myDataset(X_val, y_val)
+    if batch_size_percent > 1:
+        batch_size = batch_size_percent
+    else:
+        batch_size = int(batch_size_percent*X_train.shape[0])
+    data_train = myDataset(X_train, y_train)
+    if use_stratified_batch_size is False:
+        print("Mini-batch strategy: Random sampling")
+        dataloader_train = DataLoader(data_train, batch_size=batch_size, shuffle=True)
+    else:
+        print("Mini-batch strategy: Stratified")
+        # get class counts
+        weights = []
+        for label in torch.unique(y_train):
+            count = len(torch.where(y_train == label)[0])
+            weights.append(1 / count)
+        weights = torch.tensor(weights).to(device)
+        samples_weights = weights[y_train.type(torch.LongTensor).to(device)].flatten()
+        sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
+        dataloader_train = DataLoader(data_train, batch_size=batch_size, sampler=sampler)
+
+    criterion = torch.nn.BCELoss()
+    reconstruction_function = torch.nn.MSELoss()
+    reconstruction_function.size_average = False
+    if X_val is not None:
+        dataloader_val = torch.utils.data.DataLoader(data_val, batch_size=batch_size, shuffle=False)
+    if print_every_iteration is None:
+        print_every_iteration= int(.20*len(X_train))
+    try:
+        train_loss_epoch_saved = []
+        bce_epoch_saved = []
+        rec_epoch_saved = []
+        for epoch in tqdm(range(n_epochs)):
+            train_loss_epoch = 0
+            bce_epoch = 0
+            rec_epoch = 0
+
+            if X_val is not None:
+                val_loss_epoch = 0
+                val_bce_epoch = 0
+                val_rec_epoch = 0
+                val_loss_epoch_saved = []
+                val_bce_epoch_saved = []
+                val_rec_epoch_saved = []
+            for iteration, (batch_x, batch_y) in enumerate(dataloader_train):
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                out, x_rec = model(batch_x)
+                loss1 = criterion(out.flatten(), batch_y.view(-1).flatten())
+                loss2 = reconstruction_function(x_rec, batch_x)
+                loss = loss1 + loss2
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                train_loss_epoch += loss.item()
+                bce_epoch += loss1.item()
+                rec_epoch += loss2.item()
+
+                if iteration % print_every_iteration == 0:
+                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}'.format(
+                        epoch, iteration * len(batch_x), len(dataloader_train.dataset),
+                               100. * iteration *len(batch_x) / len(dataloader_train.dataset),
+                        loss.item() / len(batch_x), loss2.item()/len(batch_x), loss1.item()/len(batch_x)))
+                # if X_val is not None:
+                #     with torch.no_grad():
+                #         for val_batch_x, val_batch_y in dataloader_val:
+                #             val_batch_x, val_batch_y = val_batch_x.to(device).permute(0, 2, 1), val_batch_y.to(device)
+                #             loss_val, _, _, _, rec_val, kl_val, _, bce_val = model.loss_function(val_batch_x, val_batch_y, beta=beta, lamda=lamda)
+                #             val_loss_epoch += loss_val.item()
+                #             val_bce_epoch += bce_val
+                #             val_rec_epoch += rec_val
+                #             if iteration % 100 == 0:
+                #                 print('Validation Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}\tKL: {:.6f}'.format(
+                #                     epoch, iteration * len(val_batch_x), len(dataloader_val.dataset),
+                #                            100. * iteration / len(dataloader_val), loss_val.item() / len(val_batch_x),
+                #                             rec_val.item()/len(val_batch_x), bce_val.item()/len(val_batch_x),
+                #                     kl_val.item()/len(val_batch_x)))
+
+            train_loss_epoch_saved.append(train_loss_epoch / len(dataloader_train.dataset))
+            bce_epoch_saved.append(bce_epoch / len(dataloader_train.dataset))
+            rec_epoch_saved.append(rec_epoch / len(dataloader_train.dataset))
+
+            print('\n====> Train Epoch: {} Average loss: {:.6f} Average_Rec: {:.6f} Average_BCE: {:.6f}'.format(epoch,
+                                                                                            train_loss_epoch_saved[epoch],
+                                                                                            rec_epoch_saved[epoch],
+                                                                                            bce_epoch_saved[epoch]))
+            # if X_val is not None:
+            #     val_loss_epoch_saved.append(val_loss_epoch / len(dataloader_val.dataset))
+            #     val_bce_epoch_saved.append(val_bce_epoch / len(dataloader_val.dataset))
+            #     val_rec_epoch_saved.append(val_rec_epoch / len(dataloader_val.dataset))
+            #     print('\n====> Validation Epoch: {} Average loss: {:.6f} Average_Rec: {:.6f} Average_BCE: {:.6f}'.format(epoch,
+            #                                                                                                 val_loss_epoch_saved[
+            #                                                                                                     epoch],
+            #                                                                                                 val_rec_epoch_saved[
+            #                                                                                                     epoch],
+            #                                                                                                 val_bce_epoch_saved[
+            #                                                                                                     epoch]
+            #                                                                                                          ))
+
+    except KeyboardInterrupt:
+        print("Returning model up to epoch {}".format(epoch))
+    except:
+        raise
+
+    if X_val is None:
+        return model.eval(), train_loss_epoch_saved, bce_epoch_saved, rec_epoch_saved
+    # else:
+    #     return model.eval(), train_loss_epoch_saved, bce_epoch_saved, rec_epoch_saved, \
+    #             val_loss_epoch_saved, val_bce_epoch_saved, val_rec_epoch_saved
+
+def anomaly_detection_train_loop_pretrain(pre_trained_model, model, X_train, y_train, batch_size_percent=0.10,
+                                 optimizer="adam", learning_rate=1e-3, l2 =0, momentum=0.999,
+                                 X_val=None, y_val=None, n_epochs=100, use_stratified_batch_size=True,
+                                 print_every_iteration=20):
+    # freeze pretrained model
+    for param in pre_trained_model.parameters():
+        param.requires_grad = False
+
+    if optimizer == "adam":
+        optimizer = torch.optim.Adam(model.parameters(),
+                                  lr=learning_rate, weight_decay=l2)
+    elif optimizer == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(),
+                                 lr=learning_rate, weight_decay=l2, momentum=momentum)
+
+    device = model.device
+    model.train()
+
+    if not torch.is_tensor(X_train):
+        X_train = torch.Tensor(X_train)
+    if not torch.is_tensor(y_train):
+        y_train = torch.Tensor(y_train)
+
+    if X_val is not None:
+        if not torch.is_tensor(X_val):
+            X_val = torch.Tensor(X_val)
+        if not torch.is_tensor(y_val):
+            y_val = torch.Tensor(y_val)
+        data_val = myDataset(X_val, y_val)
+    if batch_size_percent > 1:
+        batch_size = batch_size_percent
+    else:
+        batch_size = int(batch_size_percent*X_train.shape[0])
+    data_train = myDataset(X_train, y_train)
+    if use_stratified_batch_size is False:
+        print("Mini-batch strategy: Random sampling")
+        dataloader_train = DataLoader(data_train, batch_size=batch_size, shuffle=True)
+    else:
+        print("Mini-batch strategy: Stratified")
+        # get class counts
+        weights = []
+        for label in torch.unique(y_train):
+            count = len(torch.where(y_train == label)[0])
+            weights.append(1 / count)
+        weights = torch.tensor(weights).to(device)
+        samples_weights = weights[y_train.type(torch.LongTensor).to(device)].flatten()
+        sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
+        dataloader_train = DataLoader(data_train, batch_size=batch_size, sampler=sampler)
+
+    criterion = torch.nn.BCELoss()
+    reconstruction_function = torch.nn.MSELoss()
+    reconstruction_function.size_average = False
+    if X_val is not None:
+        dataloader_val = torch.utils.data.DataLoader(data_val, batch_size=batch_size, shuffle=False)
+    if print_every_iteration is None:
+        print_every_iteration= int(.20*len(X_train))
+    try:
+        train_loss_epoch_saved = []
+        bce_epoch_saved = []
+        rec_epoch_saved = []
+        for epoch in tqdm(range(n_epochs)):
+            train_loss_epoch = 0
+            bce_epoch = 0
+            rec_epoch = 0
+
+            if X_val is not None:
+                val_loss_epoch = 0
+                val_bce_epoch = 0
+                val_rec_epoch = 0
+                val_loss_epoch_saved = []
+                val_bce_epoch_saved = []
+                val_rec_epoch_saved = []
+            for iteration, (batch_x, batch_y) in enumerate(dataloader_train):
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                _ = pre_trained_model(batch_x)
+                temp_out = pre_trained_model.precursor_proba
+                out, x_rec = model(temp_out)
+                loss = reconstruction_function(x_rec, batch_x)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                train_loss_epoch += loss.item()
+                rec_epoch += loss.item()
+
+                if iteration % print_every_iteration == 0:
+                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}'.format(
+                        epoch, iteration * len(batch_x), len(dataloader_train.dataset),
+                               100. * iteration *len(batch_x) / len(dataloader_train.dataset),
+                        loss.item() / len(batch_x), loss.item()/len(batch_x)))
+                # if X_val is not None:
+                #     with torch.no_grad():
+                #         for val_batch_x, val_batch_y in dataloader_val:
+                #             val_batch_x, val_batch_y = val_batch_x.to(device).permute(0, 2, 1), val_batch_y.to(device)
+                #             loss_val, _, _, _, rec_val, kl_val, _, bce_val = model.loss_function(val_batch_x, val_batch_y, beta=beta, lamda=lamda)
+                #             val_loss_epoch += loss_val.item()
+                #             val_bce_epoch += bce_val
+                #             val_rec_epoch += rec_val
+                #             if iteration % 100 == 0:
+                #                 print('Validation Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tRec Error: {:.6f}\tBCE: {:.6f}\tKL: {:.6f}'.format(
+                #                     epoch, iteration * len(val_batch_x), len(dataloader_val.dataset),
+                #                            100. * iteration / len(dataloader_val), loss_val.item() / len(val_batch_x),
+                #                             rec_val.item()/len(val_batch_x), bce_val.item()/len(val_batch_x),
+                #                     kl_val.item()/len(val_batch_x)))
+
+            train_loss_epoch_saved.append(train_loss_epoch / len(dataloader_train.dataset))
+            bce_epoch_saved.append(bce_epoch / len(dataloader_train.dataset))
+            rec_epoch_saved.append(rec_epoch / len(dataloader_train.dataset))
+
+            print('\n====> Train Epoch: {} Average loss: {:.6f} Average_Rec: {:.6f}'.format(epoch,
+                                                                                            train_loss_epoch_saved[epoch],
+                                                                                            rec_epoch_saved[epoch]))
+            # if X_val is not None:
+            #     val_loss_epoch_saved.append(val_loss_epoch / len(dataloader_val.dataset))
+            #     val_bce_epoch_saved.append(val_bce_epoch / len(dataloader_val.dataset))
+            #     val_rec_epoch_saved.append(val_rec_epoch / len(dataloader_val.dataset))
+            #     print('\n====> Validation Epoch: {} Average loss: {:.6f} Average_Rec: {:.6f} Average_BCE: {:.6f}'.format(epoch,
+            #                                                                                                 val_loss_epoch_saved[
+            #                                                                                                     epoch],
+            #                                                                                                 val_rec_epoch_saved[
+            #                                                                                                     epoch],
+            #                                                                                                 val_bce_epoch_saved[
+            #                                                                                                     epoch]
+            #                                                                                                          ))
+
+    except KeyboardInterrupt:
+        print("Returning model up to epoch {}".format(epoch))
+    except:
+        raise
+
+    if X_val is None:
+        return model.eval(), train_loss_epoch_saved, bce_epoch_saved, rec_epoch_saved
 
 
 def batch_prediction(model, x, batch_size=32, **kw):
@@ -1247,12 +1600,12 @@ def create_DF_list(meta_df_events:pd.DataFrame, path_to_tails:str, anomaly_tag:i
     DF_list = []
     missing_data_flight_id = []
     no_file = []
-    if (file_repeat_save is not None) and (os.path.exists(file_repeat_save)):
-        with open(file_repeat_save, "rb") as f:
-            DF_list = pkl.load(f)
-        start_index = len(DF_list)-1
-    else:
-        start_index = 0
+    # if (file_repeat_save is not None) and (os.path.exists(file_repeat_save)):
+    #     with open(file_repeat_save, "rb") as f:
+    #         DF_list = pkl.load(f)
+    #     start_index = len(DF_list)-1
+    # else:
+    start_index = 0
 
 
     for j, flight in enumerate(tqdm(meta_df_events.index[start_index:]), start_index):
@@ -1270,10 +1623,11 @@ def create_DF_list(meta_df_events:pd.DataFrame, path_to_tails:str, anomaly_tag:i
                     with open(path_to_flight, "rb") as f:
                         temp = pkl.load(f)
                 except:
-                    raise Exception(f"problem with loading the file, flight: {flight}")
+                    print(f"problem with loading the file, flight: {flight}")
+                    continue
             else:
-                raise Exception(f"problem with loading the file, flight: {flight}")
-            continue
+                print(f"problem with loading the file, flight: {flight}-2")
+                continue
         temp = temp["data"]
         if any(temp.columns.duplicated()) and j == 0:
             print(f"Duplicate columns: {temp.loc[:, temp.columns.duplicated()].columns}")
@@ -1297,9 +1651,9 @@ def create_DF_list(meta_df_events:pd.DataFrame, path_to_tails:str, anomaly_tag:i
             print("Missing Data")
             missing_data_flight_id.append(j)
         DF_list.append(temp)
-        if j % 500 == 0:
-            with open(file_repeat_save, "wb") as f:
-                pkl.dump(DF_list, f)
+        # if j % 500 == 0:
+        #     with open(file_repeat_save, "wb") as f:
+        #         pkl.dump(DF_list, f)
         if LIMIT is not None:
             if len(DF_list) == LIMIT:
                 break
@@ -1344,3 +1698,49 @@ def interp_bad_data(data, columns, limit, greaterThan=False, **kw):
       data[col][mask] = np.nan
       data[col] = data[col].interpolate(**kw, axis=0)
     return data
+
+# from https://anaconda.org/milesgranger/gap-statistic/notebook
+def optimalK(data, nrefs=3, maxClusters=15):
+    """
+    Calculates KMeans optimal K using Gap Statistic from Tibshirani, Walther, Hastie
+    Params:
+        data: ndarry of shape (n_samples, n_features)
+        nrefs: number of sample reference datasets to create
+        maxClusters: Maximum number of clusters to test for
+    Returns: (gaps, optimalK)
+    """
+    gaps = np.zeros((len(range(1, maxClusters)),))
+    resultsdf = pd.DataFrame({'clusterCount': [], 'gap': []})
+    for gap_index, k in enumerate(range(1, maxClusters)):
+
+        # Holder for reference dispersion results
+        refDisps = np.zeros(nrefs)
+
+        # For n references, generate random sample and perform kmeans getting resulting dispersion of each loop
+        for i in range(nrefs):
+            # Create new random reference set
+            randomReference = np.random.random_sample(size=data.shape)
+
+            # Fit to it
+            km = KMeans(k)
+            km.fit(randomReference)
+
+            refDisp = km.inertia_
+            refDisps[i] = refDisp
+
+        # Fit cluster to original data and create dispersion
+        km = KMeans(k)
+        km.fit(data)
+
+        origDisp = km.inertia_
+
+        # Calculate gap statistic
+        gap = np.log(np.mean(refDisps)) - np.log(origDisp)
+
+        # Assign this loop's gap statistic to gaps
+        gaps[gap_index] = gap
+
+        resultsdf = resultsdf.append({'clusterCount': k, 'gap': gap}, ignore_index=True)
+
+    return (gaps.argmax() + 1,
+            resultsdf)  # Plus 1 because index of 0 means 1 cluster is optimal, index 2 = 3 clusters are optimal
